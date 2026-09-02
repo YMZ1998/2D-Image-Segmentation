@@ -1,4 +1,4 @@
-name: lj_py
+name: AI
 channels:
   - pytorch
   - nvidia

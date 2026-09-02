@@ -7,8 +7,8 @@ Some implementation of segmentation for rgb and rgb-d images.
 export environment
 
 ```
-conda activate lj_py
-conda env export -n lj_py > myenv.yml
+conda activate AI
+conda env export -n AI > myenv.yml
 ```
 
 create environment
@@ -21,6 +21,7 @@ pip install
 
 ```
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple package-name
+pip install labelme -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ## Reference
