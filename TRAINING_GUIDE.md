@@ -128,6 +128,14 @@ python train.py --arch unet --batch_size 8
 python test.py --arch unet --batch_size 8
 ```
 
+使用最新权重对单张图像进行预测并显示：
+
+```powershell
+python predict_single.py path/to/image.png --arch unet
+```
+
+脚本默认加载 `save_weights/<arch>_<deep_supervision>_latest_model.pth`，并将类别 ID mask、彩色 mask 和半透明叠加图保存到 `predictions/`。使用 `--weights` 可指定其他 checkpoint，使用 `--no-show` 可只保存而不打开显示窗口。
+
 默认训练配置：
 
 - 数据路径：`data/dataset`；

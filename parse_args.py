@@ -34,7 +34,7 @@ efficientnet_dict = ['efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2',
                      'efficientnet_b6', 'efficientnet_b7', 'efficientnet_v2_s']
 
 
-def get_model(args, is_convert_onnx=False):
+def get_model(args, is_convert_onnx=False, pretrain_backbone=True):
     print('★'*30)
     print(f'model:{args.arch}\n'
           f'epoch:{args.epochs}\n'
@@ -47,7 +47,7 @@ def get_model(args, is_convert_onnx=False):
     # elif args.arch == 'mobilenet':
     #     model = MobileV3UNet(num_classes=args.num_classes, pretrain_backbone=True).to(device)
     elif args.arch == 'efficientnet' or args.arch in efficientnet_dict:
-        model = EfficientUNet(num_classes=args.num_classes, pretrain_backbone=True,
+        model = EfficientUNet(num_classes=args.num_classes, pretrain_backbone=pretrain_backbone,
                               model_name=args.arch, deep_supervision=args.deep_supervision,
                               is_convert_onnx=is_convert_onnx).to(device)
     # if args.arch == 'efficientnet2':
@@ -66,13 +66,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="pytorch training")
     parser.add_argument('--arch', '-a', metavar='ARCH', default='efficientnet_b1',
                         help='unet/mobilenet/efficientnet_b1/efficientnet_v2_s/UDTransNet/ETransUNet')
-    parser.add_argument("--data_path", default="data/dataset_352",
+    parser.add_argument("--data_path", default="data/dataset",
                         help="prepared dataset root containing train/ and test/")
     parser.add_argument("--augmented_path", default="data/augmented",
                         help="augmented dataset root used to prepare train/test data")
     parser.add_argument("--num_classes", default=4, type=int)
     parser.add_argument("--in_channels", default=1, type=int)
-    parser.add_argument("--image_size", default=352, type=int)
+    parser.add_argument("--image_size", default=704, type=int)
     parser.add_argument("--test_ratio", default=0.2, type=float)
     parser.add_argument("--split_seed", default=42, type=int)
     parser.add_argument("--skip_data_prepare", action="store_true",
