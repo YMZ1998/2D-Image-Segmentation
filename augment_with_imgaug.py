@@ -5,6 +5,7 @@ import imageio.v2 as imageio
 import imgaug.augmenters as iaa
 import numpy as np
 from imgaug.augmentables.segmaps import SegmentationMapsOnImage
+from PIL import Image
 
 
 def build_augmenter() -> iaa.Augmenter:
@@ -13,6 +14,16 @@ def build_augmenter() -> iaa.Augmenter:
         [
             iaa.Fliplr(0.5),
             iaa.Flipud(0.2),
+            iaa.Sometimes(
+                0.8,
+                iaa.Affine(
+                    rotate=(-15, 15),
+                    shear=(-5, 5),
+                    order=[0, 1, 3],
+                    cval=0,
+                    mode="constant",
+                ),
+            ),
             # The following intensity transforms affect only the source image;
             # imgaug leaves SegmentationMapsOnImage class IDs unchanged.
             iaa.SomeOf(
@@ -22,6 +33,7 @@ def build_augmenter() -> iaa.Augmenter:
                     iaa.AdditiveGaussianNoise(scale=(0, 0.025 * 255)),
                     iaa.LinearContrast((0.80, 1.25)),
                     iaa.Multiply((0.85, 1.15)),
+                    iaa.Add((-15, 15)),
                 ],
                 random_order=True,
             ),
@@ -95,7 +107,7 @@ def main() -> None:
     expected_outputs: set[Path] = set()
 
     for pair_index, (image_path, mask_path) in enumerate(pairs):
-        image = imageio.imread(image_path)
+        image = np.asarray(Image.open(image_path).convert("L"))
         mask = imageio.imread(mask_path)
         if mask.ndim == 3:
             mask = mask[..., 0]

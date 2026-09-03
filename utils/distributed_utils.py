@@ -127,6 +127,15 @@ class ConfusionMatrix(object):
         acc_global, acc, iu = self.compute()
         return iu.mean().item()
 
+    def get_dice_per_class(self):
+        """Compute dataset-level Dice for every class from the confusion matrix."""
+        h = self.mat.float()
+        true_pixels = h.sum(1)
+        predicted_pixels = h.sum(0)
+        denominator = true_pixels + predicted_pixels
+        dice = 2 * torch.diag(h) / denominator.clamp_min(1)
+        return torch.where(denominator > 0, dice, torch.full_like(dice, float("nan")))
+
 class DiceCoefficient(object):
     def __init__(self, num_classes: int = 2, ignore_index: int = -100):
         self.cumulative_dice = None

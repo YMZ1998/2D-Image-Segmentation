@@ -9,7 +9,7 @@ from torchvision import ops
 from torchvision.models import efficientnet
 
 from network.PSAM import PSAModule
-from network.RepNeXt import ChunkConv
+# from network.RepNeXt import ChunkConv
 
 
 class IntermediateLayerGetter(nn.ModuleDict):
@@ -105,7 +105,7 @@ class DecoderBlock(nn.Module):
         self.up = UpConv(middle_channels, middle_channels)
         self.conv2 = Conv(middle_channels, out_channels, kernel_size=3, dilation=1)
 
-        self.chunk_conv = ChunkConv(out_channels)
+        # self.chunk_conv = ChunkConv(out_channels)
 
         self.drop = ops.DropBlock2d(p=p, block_size=3, inplace=True)
 
@@ -114,7 +114,7 @@ class DecoderBlock(nn.Module):
         x = self.up(x)
         x = self.conv2(x)
 
-        y = self.chunk_conv(y)
+        # y = self.chunk_conv(y)
 
         x = torch.cat([y, x], dim=1)
         x = self.drop(x)
@@ -194,6 +194,8 @@ class EfficientUNet(nn.Module):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self.is_convert_onnx:
             x = x.permute(0, 3, 1, 2)  # rgb
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
         backbone_out = self.backbone(x)
         # for i in range(5):
         #     print(i, backbone_out['stage{}'.format(str(i))].shape)

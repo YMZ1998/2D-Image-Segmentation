@@ -24,8 +24,13 @@ class MyDataset(Dataset):
         # self.masks = torch.tensor(np.load(mask_path))
         self.path = path
         self.image_size = image_size
-        self.image_paths = sorted(os.listdir(path + '/image')[::])
-        self.mask_paths = sorted(os.listdir(path + '/mask')[::])
+        self.image_paths = sorted(os.listdir(path + '/image'))
+        mask_names = set(os.listdir(path + '/mask'))
+        missing_masks = [name for name in self.image_paths if name not in mask_names]
+        extra_masks = sorted(mask_names - set(self.image_paths))
+        if missing_masks or extra_masks:
+            raise ValueError(f"Image/mask mismatch in {path}: missing={missing_masks}, extra={extra_masks}")
+        self.mask_paths = self.image_paths
         # self.transforms = transform
         self.images = []
         self.masks = []

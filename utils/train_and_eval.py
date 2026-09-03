@@ -14,11 +14,8 @@ mse_loss = MSELoss(size_average=True)
 kl_loss = KLDivLoss(size_average=True)
 l1_loss = L1Loss(size_average=True)
 
-# loss_weight = None
-loss_weight = torch.as_tensor([1, 2, 2, 2, 1], device="cuda")
-ce_loss = CrossEntropyLoss(size_average=True, weight=loss_weight, label_smoothing=0.1)
-
 tversky_loss = TverskyLoss()
+CLASS_NAMES = ("background", "plaque", "Stent", "Calcification")
 
 
 def criterion(inputs, target, num_classes: int = 3):
@@ -26,13 +23,14 @@ def criterion(inputs, target, num_classes: int = 3):
     if not isinstance(inputs, dict):
         inputs = {'out': inputs}
     target = build_target(target, num_classes, ignore_index=-1)
-    # loss_weight = torch.as_tensor([1, 2, 2, 2, 1], device="cuda")
+    loss_weight = torch.as_tensor([1] + [2] * (num_classes - 1), dtype=inputs['out'].dtype,
+                                  device=inputs['out'].device)
     for name, x in inputs.items():
         a = 0.3
         # losses[name] = tversky_loss(x, target)
         # losses[name] = cross_entropy(x, target, weight=loss_weight, label_smoothing=0.1)
-        losses[name] = (1 - a) * cross_entropy(x, target, weight=loss_weight, label_smoothing=0.1)
-        + a * tversky_loss(x, target)
+        losses[name] = ((1 - a) * cross_entropy(x, target, weight=loss_weight, label_smoothing=0.1)
+                        + a * tversky_loss(x, target))
         # Flooding
         # loss = (loss - b).abs() + b
     total_loss = losses['out']
@@ -47,7 +45,6 @@ def evaluate(epoch_num, model, data_loader, device, num_classes):
     model.eval()
 
     confmat = utils.ConfusionMatrix(num_classes)
-    dice = utils.DiceCoefficient(num_classes=num_classes)
     val_loss = []
     with torch.no_grad():
         data_loader = tqdm.tqdm(data_loader, file=sys.stdout)
@@ -60,21 +57,19 @@ def evaluate(epoch_num, model, data_loader, device, num_classes):
             if isinstance(output, dict):
                 output = output['out']
             confmat.update(target.flatten(), output.argmax(1).flatten())
-            dice.update(output, target)
             val_loss.append(loss.item())
             data_loader.desc = f"[val epoch {epoch_num}] loss: {np.mean(val_loss):.4f}"
         confmat.reduce_from_all_processes()
-        dice.reduce_from_all_processes()
-
-    return confmat, dice.value.item(), np.mean(val_loss), confmat.get_miou()
+    dice_per_class = confmat.get_dice_per_class()
+    foreground_dice = torch.nanmean(dice_per_class[1:]).item()
+    return confmat, foreground_dice, np.mean(val_loss), confmat.get_miou(), dice_per_class.cpu().tolist()
 
 
 def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classes,
                     lr_scheduler, scaler=None):
     model.train()
 
-    # confmat = utils.ConfusionMatrix(num_classes)
-    # dice = utils.DiceCoefficient(num_classes=num_classes)
+    confmat = utils.ConfusionMatrix(num_classes)
 
     train_loss = []
     data_loader = tqdm.tqdm(data_loader, file=sys.stdout)
@@ -83,6 +78,9 @@ def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classe
         with torch.cuda.amp.autocast(enabled=scaler is not None):
             output = model(image)
             loss = criterion(output, target, num_classes=num_classes)
+
+        metric_output = output['out'] if isinstance(output, dict) else output
+        confmat.update(target.flatten(), metric_output.argmax(1).flatten())
 
         optimizer.zero_grad()
         if scaler is not None:
@@ -103,7 +101,10 @@ def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classe
         data_loader.desc = f"[train epoch {epoch_num}] loss: {np.mean(train_loss):.4f} "
     lr_scheduler.step()
     lr = optimizer.param_groups[0]["lr"]
-    return np.mean(train_loss), 0, 0, lr
+    confmat.reduce_from_all_processes()
+    dice_per_class = confmat.get_dice_per_class()
+    foreground_dice = torch.nanmean(dice_per_class[1:]).item()
+    return np.mean(train_loss), foreground_dice, confmat.get_miou(), lr, dice_per_class.cpu().tolist()
     # return np.mean(train_loss), dice.value.item(), confmat.get_miou(), lr
 
 

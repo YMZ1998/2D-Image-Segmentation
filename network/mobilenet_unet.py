@@ -120,6 +120,8 @@ class MobileV3UNet(nn.Module):
         # self.PPM = PPM(self.stage_out_channels[4], self.stage_out_channels[4] // 8, [2, 3, 5, 6])
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
         # input_shape = x.shape[-2:]
         backbone_out = self.backbone(x)
         # encoder

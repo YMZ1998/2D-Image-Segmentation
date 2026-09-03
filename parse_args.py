@@ -2,15 +2,15 @@ import argparse
 
 import torch
 
-from network.UDTransNet.ETransUNet import ETransUNet
-from network.UDTransNet.UDTransNet import UDTransNet
+# from network.UDTransNet.ETransUNet import ETransUNet
+# from network.UDTransNet.UDTransNet import UDTransNet
 from network.UNet import UNet
 from network.efficientnet_unet import EfficientUNet
-from network.mobilenet_unet import MobileV3UNet
+# from network.mobilenet_unet import MobileV3UNet
 
 
-def get_device():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def get_device(requested="cuda"):
+    device = torch.device(requested if requested.startswith("cuda") and torch.cuda.is_available() else "cpu")
     print("using {} device.".format(device))
     return device
 
@@ -41,11 +41,11 @@ def get_model(args, is_convert_onnx=False):
           f'batch size:{args.batch_size}\n'
           f'image size:{args.image_size}')
     print('★'*30)
-    device = get_device()
+    device = get_device(args.device)
     if args.arch == 'unet':
-        model = UNet(in_channels=3, num_classes=args.num_classes, base_c=32).to(device)
-    elif args.arch == 'mobilenet':
-        model = MobileV3UNet(num_classes=args.num_classes, pretrain_backbone=True).to(device)
+        model = UNet(in_channels=args.in_channels, num_classes=args.num_classes, base_c=32).to(device)
+    # elif args.arch == 'mobilenet':
+    #     model = MobileV3UNet(num_classes=args.num_classes, pretrain_backbone=True).to(device)
     elif args.arch == 'efficientnet' or args.arch in efficientnet_dict:
         model = EfficientUNet(num_classes=args.num_classes, pretrain_backbone=True,
                               model_name=args.arch, deep_supervision=args.deep_supervision,
@@ -53,10 +53,10 @@ def get_model(args, is_convert_onnx=False):
     # if args.arch == 'efficientnet2':
     #     from efficientunet import get_efficientunet_b1
     #     model = get_efficientunet_b1(out_channels=args.num_classes, concat_input=True, pretrained=True).to(device)
-    elif args.arch == 'UDTransNet':
-        model = UDTransNet(n_channels=3, n_classes=args.num_classes, img_size=args.image_size).to(device)
-    elif args.arch == 'ETransUNet':
-        model = ETransUNet(n_channels=3, n_classes=args.num_classes, img_size=args.image_size).to(device)
+    # elif args.arch == 'UDTransNet':
+    #     model = UDTransNet(n_channels=args.in_channels, n_classes=args.num_classes, img_size=args.image_size).to(device)
+    # elif args.arch == 'ETransUNet':
+    #     model = ETransUNet(n_channels=args.in_channels, n_classes=args.num_classes, img_size=args.image_size).to(device)
     else:
         raise ValueError('arch error')
     return model
@@ -66,12 +66,19 @@ def parse_args():
     parser = argparse.ArgumentParser(description="pytorch training")
     parser.add_argument('--arch', '-a', metavar='ARCH', default='efficientnet_b1',
                         help='unet/mobilenet/efficientnet_b1/efficientnet_v2_s/UDTransNet/ETransUNet')
-    parser.add_argument("--data_path", default="/mnt/local_storage/lijin/Segmentation/dataset/data",
-                        help="root")
-    parser.add_argument("--num_classes", default=5, type=int)
-    parser.add_argument("--image_size", default=224, type=int)
+    parser.add_argument("--data_path", default="data/dataset_352",
+                        help="prepared dataset root containing train/ and test/")
+    parser.add_argument("--augmented_path", default="data/augmented",
+                        help="augmented dataset root used to prepare train/test data")
+    parser.add_argument("--num_classes", default=4, type=int)
+    parser.add_argument("--in_channels", default=1, type=int)
+    parser.add_argument("--image_size", default=352, type=int)
+    parser.add_argument("--test_ratio", default=0.2, type=float)
+    parser.add_argument("--split_seed", default=42, type=int)
+    parser.add_argument("--skip_data_prepare", action="store_true",
+                        help="use an already prepared data_path without rebuilding it")
     parser.add_argument("--device", default="cuda", help="training device")
-    parser.add_argument("-b", "--batch_size", default=64, type=int)
+    parser.add_argument("-b", "--batch_size", default=4, type=int)
     parser.add_argument("--epochs", default=300, type=int, metavar="N",
                         help="number of total epochs to train")
     # Optimizer options

@@ -24,6 +24,41 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple package-name
 pip install labelme -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+## Data pipeline and training
+
+The training pipeline uses single-channel 704 x 704 images and four classes:
+background, plaque, Stent, and Calcification.
+Create the augmented dataset first:
+
+```powershell
+python augment_with_imgaug.py
+```
+
+Running training automatically performs a leakage-safe 80/20 split by original source image,
+resizes images and masks to 704 x 704, and writes the prepared dataset to `data/dataset`:
+
+```powershell
+python train.py --arch unet --batch_size 8
+```
+
+To prepare the split without starting training:
+
+```powershell
+python prepare_training_data.py
+```
+
+To reuse an existing prepared split without rebuilding it:
+
+```powershell
+python train.py --skip_data_prepare
+```
+
+Evaluate the saved best checkpoint on the prepared test set:
+
+```powershell
+python test.py
+```
+
 ## Reference
 
 ### RGB
