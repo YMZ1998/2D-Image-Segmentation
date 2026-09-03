@@ -38,6 +38,7 @@ def convert_onnx():
                       onnx_file_name,  # where to save the model (can be a file or file-like object)
                       input_names=["input"],
                       output_names=["output"],
+                      external_data=False,
                       verbose=True)
 
     # check the onnx model

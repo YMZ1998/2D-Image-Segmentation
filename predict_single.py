@@ -16,7 +16,7 @@ CLASS_COLORS = np.asarray([(0, 0, 0), (255, 0, 0), (0, 120, 255), (0, 255, 0)], 
 
 def parse_cli() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Predict and display one grayscale OCT image.")
-    parser.add_argument("image", type=Path, help="source image path")
+    parser.add_argument("image", type=Path, help="source image path",default=r"./data/images/capture-001.png")
     parser.add_argument("--weights", type=Path, help="checkpoint; default is the latest model")
     parser.add_argument("--arch", "-a", default="efficientnet_b1")
     parser.add_argument("--image-size", dest="image_size", type=int, default=704)

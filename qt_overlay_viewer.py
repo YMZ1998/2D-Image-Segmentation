@@ -1,6 +1,8 @@
 import sys
+import time
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageOps
 from PyQt5.QtCore import QEvent, QSettings, Qt
 from PyQt5.QtGui import QImage, QPixmap
@@ -24,8 +26,8 @@ DEFAULT_DATASET_ROOT = Path("data/augmented")
 # Compatible with class-index and display-scaled grayscale masks.
 CLASSES = {
     "plaque": ({1, 127}, (255, 0, 0)),
-    "Stent": ({3, 192}, (0, 120, 255)),
-    "Calcification": ({2, 244, 255}, (0, 255, 0)),
+    "Stent": ({2, 192}, (0, 120, 255)),
+    "Calcification": ({3, 244, 255}, (0, 255, 0)),
 }
 
 
@@ -33,7 +35,7 @@ class OverlayViewer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Mask Overlay Transparency Debugger")
-        self.resize(1100, 900)
+        self.resize(1500, 900)
 
         self.settings = QSettings("2D-Image-Segmentation", "OverlayViewer")
         saved_root = Path(self.settings.value("dataset_root", str(DEFAULT_DATASET_ROOT)))
@@ -46,6 +48,10 @@ class OverlayViewer(QMainWindow):
         self.pseudocolor_image: Image.Image | None = None
         self.mask_image: Image.Image | None = None
         self.rendered_image: Image.Image | None = None
+        self.prediction_mask: Image.Image | None = None
+        self.prediction_rendered: Image.Image | None = None
+        self.onnx_session = None
+        self.onnx_model_path: Path | None = None
         self._image_bytes: bytes | None = None
 
         self.sample_box = QComboBox()
@@ -66,6 +72,8 @@ class OverlayViewer(QMainWindow):
         self.pseudocolor_button.toggled.connect(self.toggle_pseudocolor)
         save_button = QPushButton("保存叠加图")
         save_button.clicked.connect(self.save_overlay)
+        self.predict_button = QPushButton("ONNX 预测对比")
+        self.predict_button.clicked.connect(self.run_onnx_prediction)
 
         self.dataset_label = QLabel()
         self.dataset_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -87,6 +95,7 @@ class OverlayViewer(QMainWindow):
         controls.addWidget(QLabel("透明度："))
         controls.addWidget(self.alpha_slider, 1)
         controls.addWidget(self.alpha_label)
+        controls.addWidget(self.predict_button)
         controls.addWidget(save_button)
 
         self.legend = QLabel("红色 = plaque    蓝色 = Stent    绿色 = Calcification")
@@ -99,6 +108,28 @@ class OverlayViewer(QMainWindow):
         self.image_label.setMouseTracking(True)
         self.image_label.installEventFilter(self)
 
+        self.prediction_label = QLabel("点击“ONNX 预测对比”显示预测结果")
+        self.prediction_label.setAlignment(Qt.AlignCenter)
+        self.prediction_label.setMinimumSize(400, 400)
+        self.prediction_label.setStyleSheet("background: #181818; color: #ddd;")
+
+        ground_truth_title = QLabel("真实标注（Ground Truth）")
+        ground_truth_title.setAlignment(Qt.AlignCenter)
+        ground_truth_title.setStyleSheet("font-weight: bold; padding: 4px;")
+        self.prediction_title = QLabel("ONNX 预测")
+        self.prediction_title.setAlignment(Qt.AlignCenter)
+        self.prediction_title.setStyleSheet("font-weight: bold; padding: 4px;")
+
+        ground_truth_column = QVBoxLayout()
+        ground_truth_column.addWidget(ground_truth_title)
+        ground_truth_column.addWidget(self.image_label, 1)
+        prediction_column = QVBoxLayout()
+        prediction_column.addWidget(self.prediction_title)
+        prediction_column.addWidget(self.prediction_label, 1)
+        image_row = QHBoxLayout()
+        image_row.addLayout(ground_truth_column, 1)
+        image_row.addLayout(prediction_column, 1)
+
         self.pixel_label = QLabel("将鼠标悬浮在图片上查看像素值")
         self.pixel_label.setStyleSheet(
             "font-family: Consolas, 'Microsoft YaHei'; padding: 6px 10px; "
@@ -109,7 +140,7 @@ class OverlayViewer(QMainWindow):
         layout.addLayout(dataset_controls)
         layout.addLayout(controls)
         layout.addWidget(self.legend)
-        layout.addWidget(self.image_label, 1)
+        layout.addLayout(image_row, 1)
         layout.addWidget(self.pixel_label)
 
         container = QWidget()
@@ -183,6 +214,7 @@ class OverlayViewer(QMainWindow):
             self.pseudocolor_image = None
             self.mask_image = None
             self.rendered_image = None
+            self.clear_prediction()
             self.image_label.clear()
             self.image_label.setText("没有找到匹配的图片和 mask")
             return
@@ -191,6 +223,7 @@ class OverlayViewer(QMainWindow):
             self.source_image = Image.open(self.image_dir / name).convert("RGBA")
             self.pseudocolor_image = self.create_pseudocolor(self.source_image)
             self.mask_image = Image.open(self.mask_dir / name).convert("L")
+            self.clear_prediction()
             if self.source_image.size != self.mask_image.size:
                 raise ValueError(
                     f"图片尺寸 {self.source_image.size} 与 mask 尺寸 {self.mask_image.size} 不一致"
@@ -235,18 +268,23 @@ class OverlayViewer(QMainWindow):
         if self.source_image is None or self.mask_image is None:
             return
 
+        self.rendered_image = self.compose_overlay(self.mask_image)
+        if self.prediction_mask is not None:
+            self.prediction_rendered = self.compose_overlay(self.prediction_mask)
+        self.show_rendered_image()
+
+    def compose_overlay(self, mask: Image.Image) -> Image.Image:
         base_image = self.pseudocolor_image if self.pseudocolor_button.isChecked() else self.source_image
         result = base_image.copy()
-        alpha = round(255 * alpha_percent / 100)
+        alpha = round(255 * self.alpha_slider.value() / 100)
         for class_values, rgb in CLASSES.values():
             lookup = [alpha if value in class_values else 0 for value in range(256)]
-            class_alpha = self.mask_image.point(lookup)
+            class_alpha = mask.point(lookup)
             color_layer = Image.new("RGBA", result.size, (*rgb, 0))
             color_layer.putalpha(class_alpha)
             result = Image.alpha_composite(result, color_layer)
 
-        self.rendered_image = result.convert("RGB")
-        self.show_rendered_image()
+        return result.convert("RGB")
 
     def show_rendered_image(self) -> None:
         if self.rendered_image is None:
@@ -264,6 +302,65 @@ class OverlayViewer(QMainWindow):
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         self.image_label.setPixmap(pixmap)
+        if self.prediction_rendered is not None:
+            self.set_label_image(self.prediction_label, self.prediction_rendered)
+
+    @staticmethod
+    def set_label_image(label: QLabel, image: Image.Image) -> None:
+        rgba = image.convert("RGBA")
+        data = rgba.tobytes("raw", "RGBA")
+        qimage = QImage(data, rgba.width, rgba.height, rgba.width * 4, QImage.Format_RGBA8888).copy()
+        label.setPixmap(
+            QPixmap.fromImage(qimage).scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
+
+    def clear_prediction(self) -> None:
+        self.prediction_mask = None
+        self.prediction_rendered = None
+        if hasattr(self, "prediction_label"):
+            self.prediction_label.clear()
+            self.prediction_label.setText("点击“ONNX 预测对比”显示预测结果")
+            self.prediction_title.setText("ONNX 预测")
+
+    def run_onnx_prediction(self) -> None:
+        if self.source_image is None:
+            return
+        self.predict_button.setEnabled(False)
+        self.predict_button.setText("预测中…")
+        QApplication.processEvents()
+        try:
+            import onnxruntime as ort
+            from predict_single_onnx import logits_to_mask, newest_onnx, prepare_input
+
+            model_path = newest_onnx()
+            if self.onnx_session is None or model_path != self.onnx_model_path:
+                providers = ["CPUExecutionProvider"]
+                if "CUDAExecutionProvider" in ort.get_available_providers():
+                    providers.insert(0, "CUDAExecutionProvider")
+                self.onnx_session = ort.InferenceSession(str(model_path), providers=providers)
+                self.onnx_model_path = model_path
+
+            input_meta = self.onnx_session.get_inputs()[0]
+            gray = np.asarray(self.source_image.convert("L"))
+            tensor, _, _ = prepare_input(gray, input_meta.shape, 704)
+            start = time.perf_counter()
+            output = self.onnx_session.run(None, {input_meta.name: tensor})[0]
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            prediction = logits_to_mask(output)
+            prediction = np.asarray(
+                Image.fromarray(prediction).resize(self.source_image.size, Image.Resampling.NEAREST)
+            )
+            self.prediction_mask = Image.fromarray(prediction.astype(np.uint8), mode="L")
+            self.prediction_rendered = self.compose_overlay(self.prediction_mask)
+            self.show_rendered_image()
+            provider = self.onnx_session.get_providers()[0]
+            self.prediction_title.setText(f"ONNX 预测 · {provider} · {elapsed_ms:.1f} ms")
+            self.statusBar().showMessage(f"预测完成：{model_path.name}", 5000)
+        except Exception as error:
+            QMessageBox.critical(self, "ONNX 预测失败", str(error))
+        finally:
+            self.predict_button.setEnabled(True)
+            self.predict_button.setText("ONNX 预测对比")
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt API name)
         if watched is self.image_label:
