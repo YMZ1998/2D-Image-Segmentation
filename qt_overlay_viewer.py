@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageOps
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QSettings, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -19,9 +19,7 @@ from PyQt5.QtWidgets import (
 )
 
 
-IMAGE_DIR = Path("data/merged/images")
-MASK_DIR = Path("data/merged/masks")
-OUTPUT_DIR = Path("data/merged/overlays")
+DEFAULT_DATASET_ROOT = Path("data/augmented")
 
 # Compatible with class-index and display-scaled grayscale masks.
 CLASSES = {
@@ -36,6 +34,13 @@ class OverlayViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("Mask Overlay Transparency Debugger")
         self.resize(1100, 900)
+
+        self.settings = QSettings("2D-Image-Segmentation", "OverlayViewer")
+        saved_root = Path(self.settings.value("dataset_root", str(DEFAULT_DATASET_ROOT)))
+        self.dataset_root = saved_root if self.is_dataset_root(saved_root) else DEFAULT_DATASET_ROOT
+        self.image_dir = self.dataset_root / "images"
+        self.mask_dir = self.dataset_root / "masks"
+        self.output_dir = self.dataset_root / "overlays"
 
         self.source_image: Image.Image | None = None
         self.pseudocolor_image: Image.Image | None = None
@@ -62,6 +67,17 @@ class OverlayViewer(QMainWindow):
         save_button = QPushButton("保存叠加图")
         save_button.clicked.connect(self.save_overlay)
 
+        self.dataset_label = QLabel()
+        self.dataset_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.dataset_label.setStyleSheet("padding: 5px; background: #f2f2f2; border: 1px solid #d0d0d0;")
+        choose_dataset_button = QPushButton("选择数据集目录")
+        choose_dataset_button.clicked.connect(self.choose_dataset_root)
+
+        dataset_controls = QHBoxLayout()
+        dataset_controls.addWidget(QLabel("数据集："))
+        dataset_controls.addWidget(self.dataset_label, 1)
+        dataset_controls.addWidget(choose_dataset_button)
+
         controls = QHBoxLayout()
         controls.addWidget(QLabel("样本："))
         controls.addWidget(self.sample_box, 1)
@@ -73,11 +89,8 @@ class OverlayViewer(QMainWindow):
         controls.addWidget(self.alpha_label)
         controls.addWidget(save_button)
 
-        legend = QLabel(
-            "红色 = plaque    蓝色 = Stent    绿色 = Calcification    "
-            f"图片目录：{IMAGE_DIR}    Mask 目录：{MASK_DIR}"
-        )
-        legend.setStyleSheet("color: #555; padding: 4px;")
+        self.legend = QLabel("红色 = plaque    蓝色 = Stent    绿色 = Calcification")
+        self.legend.setStyleSheet("color: #555; padding: 4px;")
 
         self.image_label = QLabel("没有找到匹配的图片和 mask")
         self.image_label.setAlignment(Qt.AlignCenter)
@@ -93,19 +106,67 @@ class OverlayViewer(QMainWindow):
         )
 
         layout = QVBoxLayout()
+        layout.addLayout(dataset_controls)
         layout.addLayout(controls)
-        layout.addWidget(legend)
+        layout.addWidget(self.legend)
         layout.addWidget(self.image_label, 1)
         layout.addWidget(self.pixel_label)
 
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+        self.update_dataset_labels()
         self.refresh_samples()
+
+    @staticmethod
+    def is_dataset_root(path: Path) -> bool:
+        return (path / "images").is_dir() and (path / "masks").is_dir()
+
+    def choose_dataset_root(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择包含 images 和 masks 子目录的数据集",
+            str(self.dataset_root.resolve()),
+        )
+        if not selected:
+            return
+        selected_root = Path(selected)
+        # Also accept selecting the images or masks subdirectory directly.
+        if selected_root.name.lower() in {"images", "masks"}:
+            selected_root = selected_root.parent
+        if not self.is_dataset_root(selected_root):
+            QMessageBox.warning(
+                self,
+                "目录格式不正确",
+                f"所选目录必须包含 images 和 masks 子目录：\n{selected_root}",
+            )
+            return
+        self.set_dataset_root(selected_root)
+
+    def set_dataset_root(self, root: Path) -> None:
+        self.dataset_root = root.resolve()
+        self.image_dir = self.dataset_root / "images"
+        self.mask_dir = self.dataset_root / "masks"
+        self.output_dir = self.dataset_root / "overlays"
+        self.settings.setValue("dataset_root", str(self.dataset_root))
+        self.update_dataset_labels()
+        self.refresh_samples()
+        self.statusBar().showMessage(f"已加载数据集：{self.dataset_root}", 4000)
+
+    def update_dataset_labels(self) -> None:
+        self.dataset_label.setText(str(self.dataset_root.resolve()))
+        self.legend.setText(
+            "红色 = plaque    蓝色 = Stent    绿色 = Calcification    "
+            f"图片：{self.image_dir}    Mask：{self.mask_dir}"
+        )
 
     def refresh_samples(self) -> None:
         selected = self.sample_box.currentText()
-        samples = [path.name for path in sorted(MASK_DIR.glob("*.png")) if (IMAGE_DIR / path.name).exists()]
+        samples = [
+            path.name
+            for path in sorted(self.mask_dir.glob("*.png"))
+            if (self.image_dir / path.name).exists()
+        ]
 
         self.sample_box.blockSignals(True)
         self.sample_box.clear()
@@ -119,14 +180,17 @@ class OverlayViewer(QMainWindow):
         name = self.sample_box.currentText()
         if not name:
             self.source_image = None
+            self.pseudocolor_image = None
             self.mask_image = None
+            self.rendered_image = None
+            self.image_label.clear()
             self.image_label.setText("没有找到匹配的图片和 mask")
             return
 
         try:
-            self.source_image = Image.open(IMAGE_DIR / name).convert("RGBA")
+            self.source_image = Image.open(self.image_dir / name).convert("RGBA")
             self.pseudocolor_image = self.create_pseudocolor(self.source_image)
-            self.mask_image = Image.open(MASK_DIR / name).convert("L")
+            self.mask_image = Image.open(self.mask_dir / name).convert("L")
             if self.source_image.size != self.mask_image.size:
                 raise ValueError(
                     f"图片尺寸 {self.source_image.size} 与 mask 尺寸 {self.mask_image.size} 不一致"
@@ -205,9 +269,23 @@ class OverlayViewer(QMainWindow):
         if watched is self.image_label:
             if event.type() == QEvent.MouseMove:
                 self.show_pixel_value(event.pos().x(), event.pos().y())
+            elif event.type() == QEvent.Wheel:
+                self.change_sample(-1 if event.angleDelta().y() > 0 else 1)
+                event.accept()
+                return True
             elif event.type() == QEvent.Leave:
                 self.pixel_label.setText("将鼠标悬浮在图片上查看像素值")
         return super().eventFilter(watched, event)
+
+    def change_sample(self, step: int) -> None:
+        count = self.sample_box.count()
+        if count < 2:
+            return
+        next_index = (self.sample_box.currentIndex() + step) % count
+        self.sample_box.setCurrentIndex(next_index)
+        self.statusBar().showMessage(
+            f"样本 {next_index + 1}/{count}：{self.sample_box.currentText()}", 1500
+        )
 
     def show_pixel_value(self, mouse_x: int, mouse_y: int) -> None:
         pixmap = self.image_label.pixmap()
@@ -245,8 +323,8 @@ class OverlayViewer(QMainWindow):
     def save_overlay(self) -> None:
         if self.rendered_image is None:
             return
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        default_path = OUTPUT_DIR / self.sample_box.currentText()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        default_path = self.output_dir / self.sample_box.currentText()
         path, _ = QFileDialog.getSaveFileName(
             self, "保存叠加图", str(default_path.resolve()), "PNG 图片 (*.png);;JPEG 图片 (*.jpg *.jpeg)"
         )

@@ -1,12 +1,11 @@
-# [2D-Image-Segmentation](https://github.com/li-jin-1998/2D-Image-Segmentation)
-
-Some implementation of segmentation for rgb and rgb-d images.
+# 2D-Image-Segmentation
 
 ## Usage
 
 export environment
 
 ```
+conda create -n AI python=3.10 -y
 conda activate AI
 conda env export -n AI > myenv.yml
 ```
@@ -15,6 +14,7 @@ create environment
 
 ```
 conda env create -f myenv.yml
+pip install -r requirements.txt
 ```
 
 pip install

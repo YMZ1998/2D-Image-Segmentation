@@ -17,4 +17,5 @@ def open_directory(directory_path):
 
 if __name__ == "__main__":
     current_directory = os.getcwd()
+    print(current_directory)
     open_directory(current_directory)

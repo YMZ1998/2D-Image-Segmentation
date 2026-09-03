@@ -16,12 +16,9 @@ get_model(args)
 onnx_file_name = "../save_weights/{}_best_model.onnx".format(args.arch)
 session = onnxruntime.InferenceSession(onnx_file_name)
 start_time = time.time()
-# paths = glob.glob(args.data_path+"/test/image/*.*")[0:-1]
+paths = glob.glob(args.data_path+"/test/image/*.*")[0:-1]
 # paths = glob.glob("/mnt/algo_storage_server/UNet/Dataset/implant2/*.*")[::3]
 # paths = glob.glob(args.data_path + "/augmentation_test/image/*.*")[::20]
-paths = glob.glob(
-    "/mnt/algo-storage-server/Workspaces/fangqi/AS connect内部下载数据/种植杆数据/scan转化ok/240529704003976420352/*")[
-                      ::20]
 
 result_path = './onnx'
 # result_path = '/mnt/algo_storage_server/UNet/Dataset/data/onnx—predict/'
