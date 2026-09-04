@@ -8,42 +8,28 @@ import torch
 from PIL import Image
 
 from parse_args import get_latest_weight_path, get_model
-
-
-CLASS_NAMES = ("background", "plaque", "Stent", "Calcification")
-CLASS_COLORS = np.asarray([(0, 0, 0), (255, 0, 0), (0, 120, 255), (0, 255, 0)], dtype=np.uint8)
+from inference_utils import clean_circular_roi, colorize_mask, overlay_prediction
+from segmentation_config import CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO
 
 
 def parse_cli() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Predict and display one grayscale OCT image.")
-    parser.add_argument("image", type=Path, help="source image path",default=r"./data/images/capture-001.png")
+    parser.add_argument("image", type=Path, nargs="?", default=Path("data/images/capture-001.png"), help="source image path")
     parser.add_argument("--weights", type=Path, help="checkpoint; default is the latest model")
     parser.add_argument("--arch", "-a", default="efficientnet_b1")
-    parser.add_argument("--image-size", dest="image_size", type=int, default=704)
+    parser.add_argument("--image-size", dest="image_size", type=int, default=IMAGE_SIZE)
     parser.add_argument("--num-classes", dest="num_classes", type=int, default=4)
     parser.add_argument("--in-channels", dest="in_channels", type=int, default=1)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--deep-supervision", dest="deep_supervision", type=int, default=0)
     parser.add_argument("--alpha", type=float, default=0.45)
-    parser.add_argument("--roi-radius-ratio", type=float, default=0.475)
+    parser.add_argument("--roi-radius-ratio", type=float, default=ROI_RADIUS_RATIO)
     parser.add_argument("--keep-border-info", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=Path("predictions"))
     parser.add_argument("--no-show", action="store_true")
     # These are used only by get_model's configuration summary.
     parser.set_defaults(epochs=0, batch_size=1)
     return parser.parse_args()
-
-
-def clean_circular_roi(gray: np.ndarray, radius_ratio: float) -> np.ndarray:
-    if not 0 < radius_ratio <= 0.5:
-        raise ValueError("--roi-radius-ratio must be in (0, 0.5]")
-    height, width = gray.shape
-    yy, xx = np.ogrid[:height, :width]
-    radius = min(height, width) * radius_ratio
-    roi = (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
-    cleaned = gray.copy()
-    cleaned[~roi] = 0
-    return cleaned
 
 
 def load_weights(model: torch.nn.Module, path: Path) -> None:
@@ -89,15 +75,9 @@ def main() -> None:
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     prediction = np.asarray(Image.fromarray(prediction).resize(source.size, Image.Resampling.NEAREST))
-    if int(prediction.max()) >= len(CLASS_COLORS):
-        raise ValueError(f"Invalid predicted class ID: {prediction.max()}")
-    color_mask = CLASS_COLORS[prediction]
+    color_mask = colorize_mask(prediction)
     gray_rgb = np.repeat(gray[..., None], 3, axis=2)
-    overlay = gray_rgb.copy()
-    foreground = prediction != 0
-    overlay[foreground] = (
-        (1 - args.alpha) * gray_rgb[foreground] + args.alpha * color_mask[foreground]
-    ).astype(np.uint8)
+    overlay = overlay_prediction(gray_rgb, prediction, args.alpha)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     outputs = {

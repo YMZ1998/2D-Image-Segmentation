@@ -7,6 +7,8 @@ import numpy as np
 from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 from PIL import Image
 
+from segmentation_config import ROI_RADIUS_RATIO
+
 
 def build_augmenter() -> iaa.Augmenter:
     """Build transformations safe for paired image/segmentation augmentation."""
@@ -51,8 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--roi-radius-ratio",
         type=float,
-        default=0.475,
-        help="Circular valid-field radius divided by the shorter image side (default: 0.475)",
+        default=ROI_RADIUS_RATIO,
+        help=f"Circular valid-field radius divided by the shorter image side (default: {ROI_RADIUS_RATIO})",
     )
     parser.add_argument(
         "--keep-border-info",

@@ -2,6 +2,8 @@ import PIL.Image
 import cv2
 import numpy as np
 
+from segmentation_config import MASK_VALUE_TO_CLASS_ID
+
 COLORS = [(0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
           (0, 0, 128), (128, 0, 128), (0, 128, 128), (128, 128, 128),
           (64, 0, 0), (192, 0, 0), (64, 128, 0), (192, 128, 0),
@@ -34,12 +36,11 @@ def pre_process(image_path, mask_path, image_size):
     mask = cv2.resize(mask, (image_size, image_size), interpolation=cv2.INTER_NEAREST)
     # Unified classes: background=0, plaque=1, Stent=2, Calcification=3.
     raw_mask = mask.copy()
-    value_to_class = {0: 0, 1: 1, 127: 1, 2: 2, 192: 2, 3: 3, 244: 3, 255: 3}
-    unknown_values = set(np.unique(raw_mask).tolist()) - set(value_to_class)
+    unknown_values = set(np.unique(raw_mask).tolist()) - set(MASK_VALUE_TO_CLASS_ID)
     if unknown_values:
         raise ValueError(f"Unknown mask pixel values in {mask_path}: {sorted(unknown_values)}")
     mask = np.zeros_like(raw_mask, dtype=np.int64)
-    for value, class_id in value_to_class.items():
+    for value, class_id in MASK_VALUE_TO_CLASS_ID.items():
         mask[raw_mask == value] = class_id
 
     return image, mask

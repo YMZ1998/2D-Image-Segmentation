@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 from PyQt5.QtCore import QEvent, QSettings, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
@@ -21,14 +21,12 @@ from PyQt5.QtWidgets import (
 )
 
 
-DEFAULT_DATASET_ROOT = Path("data/augmented")
+from inference_utils import create_pseudocolor as create_pseudocolor_array
+from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
+from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES, IMAGE_SIZE
 
-# Compatible with class-index and display-scaled grayscale masks.
-CLASSES = {
-    "plaque": ({1, 127}, (255, 0, 0)),
-    "Stent": ({2, 192}, (0, 120, 255)),
-    "Calcification": ({3, 244, 255}, (0, 255, 0)),
-}
+
+DEFAULT_DATASET_ROOT = Path("data/augmented")
 
 
 class OverlayViewer(QMainWindow):
@@ -234,29 +232,7 @@ class OverlayViewer(QMainWindow):
 
     @staticmethod
     def create_pseudocolor(image: Image.Image) -> Image.Image:
-        gray = ImageOps.autocontrast(image.convert("L"), cutoff=0.5)
-        # OCT-style warm palette: black -> dark brown -> orange -> gold -> pale yellow.
-        anchors = [
-            (0, (0, 0, 0)),
-            (45, (22, 4, 1)),
-            (100, (76, 15, 3)),
-            (160, (163, 55, 7)),
-            (215, (245, 139, 24)),
-            (255, (255, 232, 135)),
-        ]
-        channels = [[], [], []]
-        for value in range(256):
-            for index in range(len(anchors) - 1):
-                start_value, start_color = anchors[index]
-                end_value, end_color = anchors[index + 1]
-                if start_value <= value <= end_value:
-                    ratio = (value - start_value) / (end_value - start_value)
-                    for channel in range(3):
-                        channels[channel].append(
-                            round(start_color[channel] + ratio * (end_color[channel] - start_color[channel]))
-                        )
-                    break
-        return gray.convert("RGB").point(channels[0] + channels[1] + channels[2]).convert("RGBA")
+        return Image.fromarray(create_pseudocolor_array(np.asarray(image.convert("L")))).convert("RGBA")
 
     def toggle_pseudocolor(self, enabled: bool) -> None:
         self.pseudocolor_button.setText("恢复原始图" if enabled else "转换伪彩色")
@@ -277,7 +253,9 @@ class OverlayViewer(QMainWindow):
         base_image = self.pseudocolor_image if self.pseudocolor_button.isChecked() else self.source_image
         result = base_image.copy()
         alpha = round(255 * self.alpha_slider.value() / 100)
-        for class_values, rgb in CLASSES.values():
+        for class_id in range(1, len(CLASS_NAMES)):
+            class_values = CLASS_DISPLAY_VALUES[class_id]
+            rgb = CLASS_COLORS[class_id]
             lookup = [alpha if value in class_values else 0 for value in range(256)]
             class_alpha = mask.point(lookup)
             color_layer = Image.new("RGBA", result.size, (*rgb, 0))
@@ -330,7 +308,6 @@ class OverlayViewer(QMainWindow):
         QApplication.processEvents()
         try:
             import onnxruntime as ort
-            from predict_single_onnx import logits_to_mask, newest_onnx, prepare_input
 
             model_path = newest_onnx()
             if self.onnx_session is None or model_path != self.onnx_model_path:
@@ -342,11 +319,11 @@ class OverlayViewer(QMainWindow):
 
             input_meta = self.onnx_session.get_inputs()[0]
             gray = np.asarray(self.source_image.convert("L"))
-            tensor, _, _ = prepare_input(gray, input_meta.shape, 704)
+            tensor, _, _ = prepare_onnx_input(gray, input_meta.shape, IMAGE_SIZE)
             start = time.perf_counter()
             output = self.onnx_session.run(None, {input_meta.name: tensor})[0]
             elapsed_ms = (time.perf_counter() - start) * 1000
-            prediction = logits_to_mask(output)
+            prediction = onnx_output_to_mask(output)
             prediction = np.asarray(
                 Image.fromarray(prediction).resize(self.source_image.size, Image.Resampling.NEAREST)
             )
@@ -404,9 +381,9 @@ class OverlayViewer(QMainWindow):
         display_rgb = self.rendered_image.getpixel((image_x, image_y)) if self.rendered_image else source_rgb
         mask_value = self.mask_image.getpixel((image_x, image_y))
         class_name = "background"
-        for name, (values, _) in CLASSES.items():
-            if mask_value in values:
-                class_name = name
+        for class_id in range(1, len(CLASS_NAMES)):
+            if mask_value in CLASS_DISPLAY_VALUES[class_id]:
+                class_name = CLASS_NAMES[class_id]
                 break
         self.pixel_label.setText(
             f"坐标: ({image_x}, {image_y})    原图 RGB: {source_rgb}    "

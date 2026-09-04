@@ -3,12 +3,7 @@ from pathlib import Path
 
 from PIL import Image
 
-
-CLASSES = {
-    # Support both class-index masks and display-scaled grayscale masks.
-    "plaque": ({1, 127}, (255, 0, 0)),  #斑块
-    "Calcification": ({2, 244, 255}, (0, 255, 0)), #钙化
-}
+from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES
 
 
 def create_overlay(image_path: Path, mask_path: Path, output_path: Path, alpha: float) -> None:
@@ -18,7 +13,9 @@ def create_overlay(image_path: Path, mask_path: Path, output_path: Path, alpha: 
         raise ValueError(f"Size mismatch: {image_path} {image.size}, {mask_path} {mask.size}")
 
     result = image.copy()
-    for class_values, color in CLASSES.values():
+    for class_id in range(1, len(CLASS_NAMES)):
+        class_values = CLASS_DISPLAY_VALUES[class_id]
+        color = CLASS_COLORS[class_id]
         # An explicit lookup table reliably preserves class IDs 1 and 2.
         lookup_table = [255 if value in class_values else 0 for value in range(256)]
         class_mask = mask.point(lookup_table)

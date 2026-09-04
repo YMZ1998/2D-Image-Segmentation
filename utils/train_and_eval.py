@@ -9,13 +9,13 @@ from torch.nn.functional import cross_entropy
 import utils.distributed_utils as utils
 from utils.loss import build_target
 from utils.tversky_loss import TverskyLoss
+from segmentation_config import CLASS_NAMES
 
 mse_loss = MSELoss(size_average=True)
 kl_loss = KLDivLoss(size_average=True)
 l1_loss = L1Loss(size_average=True)
 
 tversky_loss = TverskyLoss()
-CLASS_NAMES = ("background", "plaque", "Stent", "Calcification")
 
 
 def criterion(inputs, target, num_classes: int = 3):

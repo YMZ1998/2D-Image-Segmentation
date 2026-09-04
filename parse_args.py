@@ -2,6 +2,8 @@ import argparse
 
 import torch
 
+from segmentation_config import IMAGE_SIZE
+
 # from network.UDTransNet.ETransUNet import ETransUNet
 # from network.UDTransNet.UDTransNet import UDTransNet
 from network.UNet import UNet
@@ -72,7 +74,7 @@ def parse_args():
                         help="augmented dataset root used to prepare train/test data")
     parser.add_argument("--num_classes", default=4, type=int)
     parser.add_argument("--in_channels", default=1, type=int)
-    parser.add_argument("--image_size", default=704, type=int)
+    parser.add_argument("--image_size", default=IMAGE_SIZE, type=int)
     parser.add_argument("--test_ratio", default=0.2, type=float)
     parser.add_argument("--split_seed", default=42, type=int)
     parser.add_argument("--skip_data_prepare", action="store_true",

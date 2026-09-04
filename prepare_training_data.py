@@ -7,6 +7,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from segmentation_config import IMAGE_SIZE
+
 
 AUGMENTATION_SUFFIX = re.compile(r"_aug\d+$")
 
@@ -43,7 +45,7 @@ def split_source_ids(source_ids: list[str], test_ratio: float, seed: int) -> tup
 def prepare_dataset(
     input_root: Path = Path("data/augmented"),
     output_root: Path = Path("data/dataset"),
-    image_size: int = 704,
+    image_size: int = IMAGE_SIZE,
     test_ratio: float = 0.2,
     seed: int = 42,
 ) -> dict:
@@ -108,7 +110,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Group-split and resize an augmented segmentation dataset.")
     parser.add_argument("--input-root", type=Path, default=Path("data/augmented"))
     parser.add_argument("--output-root", type=Path, default=Path("data/dataset"))
-    parser.add_argument("--image-size", type=int, default=704)
+    parser.add_argument("--image-size", type=int, default=IMAGE_SIZE)
     parser.add_argument("--test-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()

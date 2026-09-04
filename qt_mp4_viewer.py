@@ -4,7 +4,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image, ImageOps
 from PyQt5.QtCore import QSettings, QTimer, Qt
 from PyQt5.QtGui import QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
@@ -20,6 +19,15 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from inference_utils import (
+    clean_circular_roi,
+    create_pseudocolor,
+    newest_onnx,
+    onnx_output_to_mask,
+    prepare_onnx_input,
+)
+from segmentation_config import CLASS_COLORS, IMAGE_SIZE
 
 
 class Mp4Viewer(QMainWindow):
@@ -235,38 +243,16 @@ class Mp4Viewer(QMainWindow):
         self.show_current_frame()
 
     @staticmethod
-    def pseudocolor(gray: np.ndarray) -> np.ndarray:
-        gray = np.asarray(ImageOps.autocontrast(Image.fromarray(gray), cutoff=0.5))
-        anchors = [
-            (0, (0, 0, 0)), (45, (22, 4, 1)), (100, (76, 15, 3)),
-            (160, (163, 55, 7)), (215, (245, 139, 24)), (255, (255, 232, 135)),
-        ]
-        lookup = np.zeros((256, 3), dtype=np.uint8)
-        for start, end in zip(anchors[:-1], anchors[1:]):
-            values = np.arange(start[0], end[0] + 1)
-            ratio = (values - start[0]) / (end[0] - start[0])
-            lookup[values] = np.asarray(start[1]) + ratio[:, None] * (
-                np.asarray(end[1]) - np.asarray(start[1])
-            )
-        return lookup[gray]
-
-    @staticmethod
     def processed_gray(frame_rgb: np.ndarray) -> np.ndarray:
         """Match training preprocessing by using grayscale pixels inside the fixed OCT ROI."""
         gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-        height, width = gray.shape
-        yy, xx = np.ogrid[:height, :width]
-        radius = min(height, width) * 0.475
-        roi = (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
-        cleaned = gray.copy()
-        cleaned[~roi] = 0
-        return cleaned
+        return clean_circular_roi(gray)
 
     def compose_display_frame(self) -> np.ndarray:
         gray = self.processed_gray(self.current_rgb)
-        display = self.pseudocolor(gray) if self.pseudocolor_button.isChecked() else np.repeat(gray[..., None], 3, axis=2)
+        display = create_pseudocolor(gray) if self.pseudocolor_button.isChecked() else np.repeat(gray[..., None], 3, axis=2)
         if self.prediction_mask is not None:
-            colors = np.asarray([(0, 0, 0), (255, 0, 0), (0, 120, 255), (0, 255, 0)], dtype=np.uint8)
+            colors = np.asarray(CLASS_COLORS, dtype=np.uint8)
             foreground = self.prediction_mask != 0
             alpha = self.alpha_slider.value() / 100
             display[foreground] = (
@@ -294,7 +280,6 @@ class Mp4Viewer(QMainWindow):
 
     def predict_current_frame(self) -> None:
         import onnxruntime as ort
-        from predict_single_onnx import logits_to_mask, newest_onnx, prepare_input
 
         model_path = newest_onnx()
         if self.onnx_session is None or model_path != self.onnx_model_path:
@@ -306,9 +291,9 @@ class Mp4Viewer(QMainWindow):
 
         gray = self.processed_gray(self.current_rgb)
         input_meta = self.onnx_session.get_inputs()[0]
-        tensor, _, _ = prepare_input(gray, input_meta.shape, 704)
+        tensor, _, _ = prepare_onnx_input(gray, input_meta.shape, IMAGE_SIZE)
         output = self.onnx_session.run(None, {input_meta.name: tensor})[0]
-        prediction = logits_to_mask(output)
+        prediction = onnx_output_to_mask(output)
         self.prediction_mask = cv2.resize(
             prediction, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST
         ).astype(np.uint8)
