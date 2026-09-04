@@ -18,14 +18,15 @@ def get_device(requested="cuda"):
 
 
 def get_best_weight_path(args, verbose=True):
-    weights_path = "save_weights/{}_{}_best_model.pth".format(args.arch, args.deep_supervision)
+    # Keep the existing *_0_* checkpoint names for backward compatibility.
+    weights_path = "save_weights/{}_0_best_model.pth".format(args.arch)
     if verbose:
         print("best weight: ", weights_path)
     return weights_path
 
 
 def get_latest_weight_path(args, verbose=False):
-    weights_path = "save_weights/{}_{}_latest_model.pth".format(args.arch, args.deep_supervision)
+    weights_path = "save_weights/{}_0_latest_model.pth".format(args.arch)
     if verbose:
         print("latest weight: ", weights_path)
     return weights_path
@@ -50,8 +51,7 @@ def get_model(args, is_convert_onnx=False, pretrain_backbone=True):
     #     model = MobileV3UNet(num_classes=args.num_classes, pretrain_backbone=True).to(device)
     elif args.arch == 'efficientnet' or args.arch in efficientnet_dict:
         model = EfficientUNet(num_classes=args.num_classes, pretrain_backbone=pretrain_backbone,
-                              model_name=args.arch, deep_supervision=args.deep_supervision,
-                              is_convert_onnx=is_convert_onnx).to(device)
+                              model_name=args.arch, is_convert_onnx=is_convert_onnx).to(device)
     # if args.arch == 'efficientnet2':
     #     from efficientunet import get_efficientunet_b1
     #     model = get_efficientunet_b1(out_channels=args.num_classes, concat_input=True, pretrained=True).to(device)
@@ -87,8 +87,6 @@ def parse_args():
     parser.add_argument('--lr', default=1e-3, type=float, help='initial learning rate')
     parser.add_argument('--lrf', type=float, default=0.01)
     parser.add_argument('--resume', default=0, type=int, help='resume from checkpoint')
-    parser.add_argument('--deep_supervision', default=0, help='deep supervision training')
-    parser.add_argument('--multi_scale', default=0, help='multi-scale training')
     parser.add_argument('--start_epoch', default=1, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--save_best', default=True, type=bool, help='only save best metric weights')

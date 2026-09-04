@@ -75,12 +75,7 @@ def train():
     lf = lambda x: ((1 + math.cos(x * math.pi / args.epochs)) / 2) * (1 - args.lrf) + args.lrf  # cosine
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
 
-    if args.multi_scale:
-        weights_path = get_latest_weight_path(args)
-        model.load_state_dict(torch.load(weights_path, map_location='cpu'))
-        print(">" * 10, 'load last weight:', weights_path)
-
-    if args.resume and not args.multi_scale:
+    if args.resume:
         weights_path = get_best_weight_path(args)
         if not os.path.exists(weights_path):
             raise FileNotFoundError('not found weights file: {}'.format(weights_path))

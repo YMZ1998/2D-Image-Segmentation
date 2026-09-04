@@ -21,7 +21,6 @@ def parse_cli() -> argparse.Namespace:
     parser.add_argument("--num-classes", dest="num_classes", type=int, default=4)
     parser.add_argument("--in-channels", dest="in_channels", type=int, default=1)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--deep-supervision", dest="deep_supervision", type=int, default=0)
     parser.add_argument("--alpha", type=float, default=0.45)
     parser.add_argument("--roi-radius-ratio", type=float, default=ROI_RADIUS_RATIO)
     parser.add_argument("--keep-border-info", action="store_true")

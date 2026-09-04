@@ -55,7 +55,7 @@ class DecoderBlock(nn.Module):
 class ResUNet(nn.Module):
     def __init__(self, num_classes, pretrain_backbone: bool = False):
         super(ResUNet, self).__init__()
-        self.stage_out_channels = [64,64, 128, 256, 512]
+        self.stage_out_channels = [64, 64, 128, 256, 512]
         resnet = models.resnet34(pretrained=True)
         self.firstconv = resnet.conv1
         self.firstbn = resnet.bn1
@@ -67,10 +67,10 @@ class ResUNet(nn.Module):
         self.encoder4 = resnet.layer4
 
         self.up1 = DecoderBlock(self.stage_out_channels[4], self.stage_out_channels[3])
-        self.up2 = DecoderBlock(self.stage_out_channels[3] , self.stage_out_channels[2])
-        self.up3 = DecoderBlock(self.stage_out_channels[2] , self.stage_out_channels[1])
-        self.up4 = DecoderBlock(self.stage_out_channels[1] , self.stage_out_channels[0])
-        self.outconv = OutConv(self.stage_out_channels[0] , num_classes=num_classes)
+        self.up2 = DecoderBlock(self.stage_out_channels[3], self.stage_out_channels[2])
+        self.up3 = DecoderBlock(self.stage_out_channels[2], self.stage_out_channels[1])
+        self.up4 = DecoderBlock(self.stage_out_channels[1], self.stage_out_channels[0])
+        self.outconv = OutConv(self.stage_out_channels[0], num_classes=num_classes)
 
         from network.PSAM import PPM
         self.PPM = PPM(self.stage_out_channels[4], self.stage_out_channels[4] // 8, [2, 3, 5, 6])
@@ -90,13 +90,14 @@ class ResUNet(nn.Module):
         # e4 = self.PPM(e4)
 
         # decoder
-        d4 = self.up1(e4)+e3
-        d3 = self.up2(d4)+e2
-        d2 = self.up3(d3)+e1
+        d4 = self.up1(e4) + e3
+        d3 = self.up2(d4) + e2
+        d2 = self.up3(d3) + e1
         d1 = self.up4(d2)
         out = self.outconv(d1)
 
         return {"out": out}
+
 
 if __name__ == '__main__':
     model = ResUNet(num_classes=3, pretrain_backbone=True).to("cuda")

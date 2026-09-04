@@ -1,9 +1,5 @@
 #python train.py --arch "efficientnet_b0" --epoch 100;
 #python train.py --arch "efficientnet_b1" --epoch 100;
-#python train.py --arch "efficientnet_b2" --epoch 100;
-#python train.py --arch "efficientnet_b3" --epoch 100;
 #python test.py --arch "efficientnet_b0" --epoch 100;
 #python test.py --arch "efficientnet_b1" --epoch 100;
-#python test.py --arch "efficientnet_b2" --epoch 100;
-#python test.py --arch "efficientnet_b3" --epoch 100;
-python train.py --arch "efficientnet_b1" --epoch 100 --lr 1e-4 --multi_scale True --image_size 224 --batch_size 64;
+
