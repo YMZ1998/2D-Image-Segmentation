@@ -22,6 +22,9 @@ pip install
 ```
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple package-name
 pip install labelme -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+python -m pip install torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Data pipeline and training
