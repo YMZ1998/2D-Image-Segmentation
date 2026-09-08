@@ -68,17 +68,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="pytorch training")
     parser.add_argument('--arch', '-a', metavar='ARCH', default='efficientnet_b1',
                         help='unet/mobilenet/efficientnet_b1/efficientnet_v2_s/UDTransNet/ETransUNet')
-    parser.add_argument("--data_path", default="data/dataset",
-                        help="prepared dataset root containing train/ and test/")
-    parser.add_argument("--augmented_path", default="data/augmented",
-                        help="augmented dataset root used to prepare train/test data")
+    parser.add_argument("--data_path", default="data/oct_augmented_dataset",
+                        help="augmented dataset root containing train/ and test/")
     parser.add_argument("--num_classes", default=len(CLASS_NAMES), type=int)
     parser.add_argument("--in_channels", default=1, type=int)
     parser.add_argument("--image_size", default=IMAGE_SIZE, type=int)
-    parser.add_argument("--test_ratio", default=0.2, type=float)
-    parser.add_argument("--split_seed", default=42, type=int)
-    parser.add_argument("--skip_data_prepare", action="store_true",
-                        help="use an already prepared data_path without rebuilding it")
     parser.add_argument("--device", default="cuda", help="training device")
     parser.add_argument("-b", "--batch_size", default=4, type=int)
     parser.add_argument("--epochs", default=300, type=int, metavar="N",

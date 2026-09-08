@@ -17,14 +17,12 @@ from segmentation_config import CLASS_ID_TO_MASK_VALUE
 SOURCE_LABEL_TO_CLASS_ID = {
     "1": 1,  # plaque
     "2": 2,  # Stent
-    "3": 3,  # Calcification (reserved; currently absent)
-    "5": 4,  # InvalidRegion
+    "5": 3,  # InvalidRegion
     "plaque": 1,
     "Stent": 2,
-    "Calcification": 3,
-    "InvalidRegion": 4,
+    "InvalidRegion": 3,
 }
-CLASS_NAMES = ("background", "plaque", "Stent", "Calcification", "InvalidRegion")
+CLASS_NAMES = ("background", "plaque", "Stent", "InvalidRegion")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
 

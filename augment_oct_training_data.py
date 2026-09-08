@@ -10,6 +10,7 @@ import numpy as np
 from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 
 from augment_with_imgaug import build_augmenter, circular_roi, clear_outside_roi
+from dir_process import remove_and_create_dir
 from segmentation_config import MASK_VALUE_TO_CLASS_ID
 
 
@@ -41,7 +42,7 @@ def main() -> None:
     if not source.is_dir():
         parser.error(f"Input dataset does not exist: {source}")
     if output.exists():
-        raise FileExistsError(f"Output already exists; refusing overwrite: {output}")
+        remove_and_create_dir(output)
 
     train_pairs = paired_paths(source, "train")
     test_pairs = paired_paths(source, "test")

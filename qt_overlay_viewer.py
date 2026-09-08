@@ -96,9 +96,7 @@ class OverlayViewer(QMainWindow):
         controls.addWidget(self.predict_button)
         controls.addWidget(save_button)
 
-        self.legend = QLabel(
-            "红色 = plaque    蓝色 = Stent    绿色 = Calcification    黄色 = InvalidRegion"
-        )
+        self.legend = QLabel("红色 = plaque    蓝色 = Stent    黄色 = InvalidRegion")
         self.legend.setStyleSheet("color: #555; padding: 4px;")
 
         self.image_label = QLabel("没有找到匹配的图片和 mask")
@@ -187,7 +185,7 @@ class OverlayViewer(QMainWindow):
     def update_dataset_labels(self) -> None:
         self.dataset_label.setText(str(self.dataset_root.resolve()))
         self.legend.setText(
-            "红色 = plaque    蓝色 = Stent    绿色 = Calcification    "
+            "红色 = plaque    蓝色 = Stent    黄色 = InvalidRegion    "
             f"图片：{self.image_dir}    Mask：{self.mask_dir}"
         )
 

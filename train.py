@@ -2,13 +2,11 @@ import datetime
 import math
 import os
 import time
-from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
 from parse_args import parse_args, get_model, get_best_weight_path, get_latest_weight_path, get_device
-from prepare_training_data import prepare_dataset
 from utils.dataset import MyDataset
 from utils.train_and_eval import CLASS_NAMES, train_one_epoch, evaluate, create_lr_scheduler
 
@@ -16,15 +14,6 @@ from utils.train_and_eval import CLASS_NAMES, train_one_epoch, evaluate, create_
 # tensorboard --logdir=./runs --port=2000
 def train():
     args = parse_args()
-
-    if not args.skip_data_prepare:
-        prepare_dataset(
-            input_root=Path(args.augmented_path),
-            output_root=Path(args.data_path),
-            image_size=args.image_size,
-            test_ratio=args.test_ratio,
-            seed=args.split_seed,
-        )
 
     # print('Start Tensorboard with "tensorboard --logdir=runs", view at http://localhost:2000/')
     # tb_writer = SummaryWriter()
