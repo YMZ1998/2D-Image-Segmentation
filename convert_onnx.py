@@ -20,7 +20,7 @@ def convert_onnx():
     print("using {} device.".format(device))
 
     # load weights
-    model.load_state_dict(torch.load(weights_path, map_location='cpu')['model'])
+    model.load_state_dict(torch.load(weights_path, map_location='cpu',weights_only=False)['model'])
     model.to(device)
     onnx_file_name = "save_weights/{}_best_model.onnx".format(args.arch)
     batch_size = 1
