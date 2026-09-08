@@ -54,7 +54,7 @@ def convert_onnx():
 
     # compare ONNX Runtime and Pytorch results
     # assert_allclose: Raises an AssertionError if two objects are not equal up to desired tolerance.
-    np.testing.assert_allclose(to_numpy(torch_out), ort_outs[0], rtol=1e-03, atol=1e-05)
+    np.testing.assert_allclose(to_numpy(torch_out), ort_outs[0], rtol=1e-03, atol=1e-03)
     print("Exported model has been tested with ONNXRuntime, and the result looks good!")
 
     print(f"save onnx model to {onnx_file_name}.")

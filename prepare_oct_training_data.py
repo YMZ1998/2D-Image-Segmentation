@@ -17,7 +17,7 @@ from segmentation_config import CLASS_ID_TO_MASK_VALUE
 SOURCE_LABEL_TO_CLASS_ID = {
     "1": 1,  # plaque
     "2": 2,  # Stent
-    "5": 3,  # InvalidRegion
+    "3": 3,  # InvalidRegion
     "plaque": 1,
     "Stent": 2,
     "InvalidRegion": 3,
@@ -78,7 +78,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Extracted"))
     parser.add_argument("--output", type=Path, default=Path("data/oct_dataset"))
-    parser.add_argument("--test-ratio", type=float, default=0.2)
+    parser.add_argument("--test-ratio", type=float, default=0.3)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     source = args.input.resolve()
