@@ -18,7 +18,7 @@ def parse_cli() -> argparse.Namespace:
     parser.add_argument("--weights", type=Path, help="checkpoint; default is the latest model")
     parser.add_argument("--arch", "-a", default="efficientnet_b1")
     parser.add_argument("--image-size", dest="image_size", type=int, default=IMAGE_SIZE)
-    parser.add_argument("--num-classes", dest="num_classes", type=int, default=4)
+    parser.add_argument("--num-classes", dest="num_classes", type=int, default=len(CLASS_NAMES))
     parser.add_argument("--in-channels", dest="in_channels", type=int, default=1)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--alpha", type=float, default=0.45)

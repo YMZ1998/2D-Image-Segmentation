@@ -26,7 +26,7 @@ from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
 from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES, IMAGE_SIZE
 
 
-DEFAULT_DATASET_ROOT = Path("data/augmented")
+DEFAULT_DATASET_ROOT = Path("data/oct_dataset/train")
 
 
 class OverlayViewer(QMainWindow):
@@ -38,8 +38,8 @@ class OverlayViewer(QMainWindow):
         self.settings = QSettings("2D-Image-Segmentation", "OverlayViewer")
         saved_root = Path(self.settings.value("dataset_root", str(DEFAULT_DATASET_ROOT)))
         self.dataset_root = saved_root if self.is_dataset_root(saved_root) else DEFAULT_DATASET_ROOT
-        self.image_dir = self.dataset_root / "images"
-        self.mask_dir = self.dataset_root / "masks"
+        self.image_dir = self.dataset_root / "image"
+        self.mask_dir = self.dataset_root / "mask"
         self.output_dir = self.dataset_root / "overlays"
 
         self.source_image: Image.Image | None = None
@@ -96,7 +96,9 @@ class OverlayViewer(QMainWindow):
         controls.addWidget(self.predict_button)
         controls.addWidget(save_button)
 
-        self.legend = QLabel("红色 = plaque    蓝色 = Stent    绿色 = Calcification")
+        self.legend = QLabel(
+            "红色 = plaque    蓝色 = Stent    绿色 = Calcification    黄色 = InvalidRegion"
+        )
         self.legend.setStyleSheet("color: #555; padding: 4px;")
 
         self.image_label = QLabel("没有找到匹配的图片和 mask")
@@ -149,7 +151,7 @@ class OverlayViewer(QMainWindow):
 
     @staticmethod
     def is_dataset_root(path: Path) -> bool:
-        return (path / "images").is_dir() and (path / "masks").is_dir()
+        return (path / "image").is_dir() and (path / "mask").is_dir()
 
     def choose_dataset_root(self) -> None:
         selected = QFileDialog.getExistingDirectory(
@@ -161,7 +163,7 @@ class OverlayViewer(QMainWindow):
             return
         selected_root = Path(selected)
         # Also accept selecting the images or masks subdirectory directly.
-        if selected_root.name.lower() in {"images", "masks"}:
+        if selected_root.name.lower() in {"image", "mask"}:
             selected_root = selected_root.parent
         if not self.is_dataset_root(selected_root):
             QMessageBox.warning(
@@ -174,8 +176,8 @@ class OverlayViewer(QMainWindow):
 
     def set_dataset_root(self, root: Path) -> None:
         self.dataset_root = root.resolve()
-        self.image_dir = self.dataset_root / "images"
-        self.mask_dir = self.dataset_root / "masks"
+        self.image_dir = self.dataset_root / "image"
+        self.mask_dir = self.dataset_root / "mask"
         self.output_dir = self.dataset_root / "overlays"
         self.settings.setValue("dataset_root", str(self.dataset_root))
         self.update_dataset_labels()

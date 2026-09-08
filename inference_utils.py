@@ -81,9 +81,11 @@ def prepare_onnx_input(
 def onnx_output_to_mask(output: np.ndarray) -> np.ndarray:
     output = np.asarray(output)
     if output.ndim == 4:
-        if output.shape[1] == len(CLASS_NAMES):
+        # Accept the previous four-class model as well as the current five-class model.
+        valid_class_counts = range(2, len(CLASS_NAMES) + 1)
+        if output.shape[1] in valid_class_counts:
             return output.argmax(axis=1)[0].astype(np.uint8)
-        if output.shape[-1] == len(CLASS_NAMES):
+        if output.shape[-1] in valid_class_counts:
             return output.argmax(axis=-1)[0].astype(np.uint8)
         raise ValueError(f"Cannot find the class axis in ONNX output shape: {output.shape}")
     if output.ndim == 3 and output.shape[0] == 1:
@@ -109,4 +111,3 @@ def overlay_prediction(base_rgb: np.ndarray, mask: np.ndarray, alpha: float) -> 
         (1 - alpha) * result[foreground] + alpha * colors[foreground]
     ).astype(np.uint8)
     return result
-

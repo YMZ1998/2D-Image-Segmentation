@@ -2,6 +2,7 @@
 visualization/
 ./*.png
 *.png
+*.json
 *.jpg
 runs/
 data/
