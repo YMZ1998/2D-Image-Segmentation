@@ -146,8 +146,7 @@ class DecoderBlock2(nn.Module):
 
 
 class EfficientUNet(nn.Module):
-    def __init__(self, num_classes, pretrain_backbone: bool = True, model_name: str = None, deep_supervision=False,
-                 is_convert_onnx=False):
+    def __init__(self, num_classes, pretrain_backbone: bool = True, model_name: str = None, deep_supervision=False):
         super(EfficientUNet, self).__init__()
         if model_name == 'efficientnet_b0':
             backbone = efficientnet.efficientnet_b0(pretrained=pretrain_backbone)
@@ -168,19 +167,41 @@ class EfficientUNet(nn.Module):
             backbone = efficientnet.efficientnet_v2_m(pretrained=pretrain_backbone)
             self.stage_out_channels = [24, 48, 80, 176, 512]
         else:
-            exit(1)
+            raise ValueError(f"Unsupported EfficientNet model: {model_name}")
+
+        rgb_conv = backbone.features[0][0]
+        if not isinstance(rgb_conv, nn.Conv2d) or rgb_conv.in_channels != 3:
+            raise TypeError("Unexpected EfficientNet stem; expected a 3-channel Conv2d")
+        gray_conv = nn.Conv2d(
+            in_channels=1,
+            out_channels=rgb_conv.out_channels,
+            kernel_size=rgb_conv.kernel_size,
+            stride=rgb_conv.stride,
+            padding=rgb_conv.padding,
+            dilation=rgb_conv.dilation,
+            groups=rgb_conv.groups,
+            bias=rgb_conv.bias is not None,
+            padding_mode=rgb_conv.padding_mode,
+        )
+        if pretrain_backbone:
+            with torch.no_grad():
+                # For a repeated grayscale RGB input, summing the three kernels
+                # preserves the pretrained stem's response exactly.
+                gray_conv.weight.copy_(rgb_conv.weight.sum(dim=1, keepdim=True))
+                if rgb_conv.bias is not None:
+                    gray_conv.bias.copy_(rgb_conv.bias)
+        backbone.features[0][0] = gray_conv
         stage_indices = [1, 2, 3, 5, 7]
         return_layers = dict([(str(j), f"stage{i}") for i, j in enumerate(stage_indices)])
         self.backbone = IntermediateLayerGetter(backbone.features, return_layers=return_layers)
         drop = [0.2, 0.2, 0.2, 0.2]
-        print(f"drop : {drop}, convert onnx : {is_convert_onnx}, deep_supervision : {deep_supervision}")
+        print(f"drop : {drop}, input channels : 1, deep_supervision : {deep_supervision}")
         self.up1 = DecoderBlock(self.stage_out_channels[4], self.stage_out_channels[3], drop[0])
         self.up2 = DecoderBlock(self.stage_out_channels[3] * 2, self.stage_out_channels[2], drop[1])
         self.up3 = DecoderBlock(self.stage_out_channels[2] * 2, self.stage_out_channels[1], drop[2])
         self.up4 = DecoderBlock(self.stage_out_channels[1] * 2, self.stage_out_channels[0], drop[3])
         self.outconv = OutConv(self.stage_out_channels[0] * 2, num_classes=num_classes)
 
-        self.is_convert_onnx = is_convert_onnx
         self.deep_supervision = deep_supervision
         if self.deep_supervision:
             self.auxiliary0 = nn.Conv2d(self.stage_out_channels[0] * 2, num_classes, kernel_size=1)
@@ -192,10 +213,8 @@ class EfficientUNet(nn.Module):
         # self.PPM = PPM(self.stage_out_channels[4], self.stage_out_channels[4] // 4, [2, 3, 5, 6])
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        if self.is_convert_onnx:
-            x = x.permute(0, 3, 1, 2)  # rgb
-        if x.shape[1] == 1:
-            x = x.repeat(1, 3, 1, 1)
+        if x.ndim != 4 or x.shape[1] != 1:
+            raise ValueError(f"Expected NCHW single-channel input, got {tuple(x.shape)}")
         backbone_out = self.backbone(x)
         # for i in range(5):
         #     print(i, backbone_out['stage{}'.format(str(i))].shape)
@@ -216,8 +235,6 @@ class EfficientUNet(nn.Module):
         d2 = self.up3(d3, e1)
         d1 = self.up4(d2, e0)
         out = self.outconv(d1)
-        if self.is_convert_onnx:
-            return out.permute(0, 2, 3, 1)
         if self.training and self.deep_supervision:
             # print(d1.shape, d2.shape, d3.shape, d4.shape)
             # print(self.auxiliary0.weight.shape, self.auxiliary1.weight.shape, self.auxiliary2.weight.shape, )

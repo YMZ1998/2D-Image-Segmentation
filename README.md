@@ -29,8 +29,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 ## Data pipeline and training
 
-The training pipeline uses single-channel 704 x 704 images and four classes:
-background, plaque, Stent, and Calcification.
+The training pipeline uses single-channel 1024 x 1024 images and four classes:
+background, plaque, Stent, and InvalidRegion.
 Create the augmented dataset first:
 
 ```powershell

@@ -4,11 +4,8 @@ import torch
 
 from segmentation_config import CLASS_NAMES, IMAGE_SIZE
 
-# from network.UDTransNet.ETransUNet import ETransUNet
-# from network.UDTransNet.UDTransNet import UDTransNet
 from network.UNet import UNet
 from network.efficientnet_unet import EfficientUNet
-# from network.mobilenet_unet import MobileV3UNet
 
 
 def get_device(requested="cuda"):
@@ -37,7 +34,7 @@ efficientnet_dict = ['efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2',
                      'efficientnet_b6', 'efficientnet_b7', 'efficientnet_v2_s']
 
 
-def get_model(args, is_convert_onnx=False, pretrain_backbone=True):
+def get_model(args, pretrain_backbone=True):
     print('★'*30)
     print(f'model:{args.arch}\n'
           f'epoch:{args.epochs}\n'
@@ -47,18 +44,9 @@ def get_model(args, is_convert_onnx=False, pretrain_backbone=True):
     device = get_device(args.device)
     if args.arch == 'unet':
         model = UNet(in_channels=args.in_channels, num_classes=args.num_classes, base_c=32).to(device)
-    # elif args.arch == 'mobilenet':
-    #     model = MobileV3UNet(num_classes=args.num_classes, pretrain_backbone=True).to(device)
     elif args.arch == 'efficientnet' or args.arch in efficientnet_dict:
         model = EfficientUNet(num_classes=args.num_classes, pretrain_backbone=pretrain_backbone,
-                              model_name=args.arch, is_convert_onnx=is_convert_onnx).to(device)
-    # if args.arch == 'efficientnet2':
-    #     from efficientunet import get_efficientunet_b1
-    #     model = get_efficientunet_b1(out_channels=args.num_classes, concat_input=True, pretrained=True).to(device)
-    # elif args.arch == 'UDTransNet':
-    #     model = UDTransNet(n_channels=args.in_channels, n_classes=args.num_classes, img_size=args.image_size).to(device)
-    # elif args.arch == 'ETransUNet':
-    #     model = ETransUNet(n_channels=args.in_channels, n_classes=args.num_classes, img_size=args.image_size).to(device)
+                              model_name=args.arch).to(device)
     else:
         raise ValueError('arch error')
     return model

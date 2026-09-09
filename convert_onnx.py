@@ -2,10 +2,20 @@ import numpy as np
 import onnx
 import onnxruntime
 import torch
+from torch import nn
 
 
 def to_numpy(tensor):
     return tensor.detach().cpu().numpy() if tensor.requires_grad else tensor.cpu().numpy()
+
+
+class OnnxModel(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, image):
+        return self.model(image)["out"]
 
 
 def convert_onnx():
@@ -13,22 +23,22 @@ def convert_onnx():
 
     args = parse_args()
     # create model
-    model = get_model(args, is_convert_onnx=True)
+    model = get_model(args, pretrain_backbone=False)
     weights_path = get_best_weight_path(args)
 
     device = torch.device("cpu")
     print("using {} device.".format(device))
 
     # load weights
-    model.load_state_dict(torch.load(weights_path, map_location='cpu',weights_only=False)['model'])
-    model.to(device)
+    checkpoint = torch.load(weights_path, map_location="cpu", weights_only=False)
+    state = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
+    model.load_state_dict(state)
+    model = OnnxModel(model).to(device).eval()
     onnx_file_name = "save_weights/{}_best_model.onnx".format(args.arch)
     batch_size = 1
 
-    model.eval()
-    # input to the model
-    # [batch, channel, height, width]
-    x = torch.rand(batch_size, args.image_size, args.image_size, 3, requires_grad=True)
+    # NCHW grayscale input, identical to training and Python inference.
+    x = torch.rand(batch_size, 1, args.image_size, args.image_size)
     torch_out = model(x)
     # print(torch_out)
     # torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -38,8 +48,9 @@ def convert_onnx():
                       onnx_file_name,  # where to save the model (can be a file or file-like object)
                       input_names=["input"],
                       output_names=["output"],
+                      opset_version=17,
                       external_data=False,
-                      verbose=True)
+                      verbose=False)
 
     # check the onnx model
     onnx_model = onnx.load(onnx_file_name)

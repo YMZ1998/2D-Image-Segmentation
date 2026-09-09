@@ -7,19 +7,17 @@
 | 训练 ID | 类别 | 英文名称 | 原始 mask 灰度值 |
 | --- | --- | --- | --- |
 | 0 | 背景 | background | 0 |
-| 1 | 斑块 | plaque | 127 |
-| 2 | 支架 | Stent | 192 |
-| 3 | 钙化 | Calcification | 244 |
+| 1 | 斑块 | plaque | 64 |
+| 2 | 支架 | Stent | 128 |
+| 3 | 无效成像区域 | InvalidRegion | 192（兼容已有数据中的 255） |
 
 `utils/preprocess.py` 在训练时将 mask 灰度值转换为连续类别 ID `0–3`。mask 缩放必须使用最近邻插值，禁止使用会产生中间灰度值的双线性或双三次插值。
 
 ## 2. 图像格式与分辨率
 
-- 原始图像：单通道灰度图，分辨率 `1408 × 1408`。
-- 默认训练分辨率：`704 × 704`。
-- 可选快速实验分辨率：`352 × 352`。
+- 原始图像和训练图像均为单通道灰度图，分辨率 `1024 × 1024`。
 
-当前默认使用 `704 × 704`，以保留细小支架和钙化边缘信息。其显存与计算开销约为 `352 × 352` 的四倍；显存不足时应优先减小 batch size，也可临时切换到 `352 × 352` 做快速实验。
+当前训练流程保持原始 `1024 × 1024` 分辨率；显存不足时应优先减小 batch size。
 
 生成默认 704 分辨率的数据：
 
@@ -152,7 +150,7 @@ python predict_single.py path/to/image.png --arch unet
 python train.py --skip_data_prepare
 ```
 
-EfficientNet 和 MobileNet 使用 RGB 预训练骨干时，会在模型内部把单通道张量复制为三通道；磁盘图片和数据加载器仍保持单通道。UNet、UDTransNet 和 ETransUNet 原生使用单通道输入。
+EfficientUNet 的骨干首层已改为单通道卷积。使用 ImageNet 预训练参数时，将原首层三个 RGB 通道的卷积权重求和后初始化单通道卷积，从而保持重复灰度输入时的初始响应。训练、PyTorch 推理和 ONNX 推理统一使用 `[N, 1, H, W]` 输入。
 
 ## 8. 训练前检查
 
@@ -169,8 +167,8 @@ EfficientNet 和 MobileNet 使用 RGB 预训练骨干时，会在模型内部把
 
 ## 9. 评估建议
 
-训练过程会在每个 epoch 打印训练集和验证集的 background、plaque、Stent、Calcification Dice，并将结果写入 `log/` 下的训练日志。总体 Dice 为三个前景类别 Dice 的平均值，不包含 background。
+训练过程会在每个 epoch 打印训练集和验证集的 background、plaque、Stent、InvalidRegion Dice，并将结果写入 `log/` 下的训练日志。总体 Dice 为三个前景类别 Dice 的平均值，不包含 background。
 
-除总体 mIoU 和 Dice 外，应分别报告 plaque、Stent 和 Calcification 的指标，并在正常图像上统计误检率。背景占比很高，不应只使用像素准确率评价模型。
+除总体 mIoU 和 Dice 外，应分别报告 plaque、Stent 和 InvalidRegion 的指标，并在正常图像上统计误检率。背景占比很高，不应只使用像素准确率评价模型。
 
 每次实验还应记录原始样本数、正常样本数、增强倍率、划分随机种子、输入分辨率、模型和代码版本，确保结果可以复现和正确比较。
