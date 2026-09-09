@@ -5,7 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
-from dir_process import remove_and_create_dir
+from scripts.data_tools.common import remove_and_create_dir
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 

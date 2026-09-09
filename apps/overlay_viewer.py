@@ -2,6 +2,10 @@ import sys
 import time
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 from PIL import Image
 from PyQt5.QtCore import QEvent, QSettings, Qt
@@ -27,7 +31,7 @@ from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES,
 
 
 DEFAULT_DATASET_ROOT = Path("data/oct_dataset/train")
-
+model_path = newest_onnx(Path("../save_weights"))
 
 class OverlayViewer(QMainWindow):
     def __init__(self) -> None:
@@ -309,7 +313,6 @@ class OverlayViewer(QMainWindow):
         try:
             import onnxruntime as ort
 
-            model_path = newest_onnx()
             if self.onnx_session is None or model_path != self.onnx_model_path:
                 providers = ["CPUExecutionProvider"]
                 if "CUDAExecutionProvider" in ort.get_available_providers():

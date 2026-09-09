@@ -1,5 +1,0 @@
-#python train.py --arch "efficientnet_b0" --epoch 100;
-#python train.py --arch "efficientnet_b1" --epoch 100;
-#python test.py --arch "efficientnet_b0" --epoch 100;
-#python test.py --arch "efficientnet_b1" --epoch 100;
-

@@ -2,12 +2,17 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import cv2
 
-from dir_process import remove_and_create_dir
-from list_mp4_files import DEFAULT_ROOT, find_mp4_files
+from scripts.data_tools.common import remove_and_create_dir
+from scripts.data_tools.list_mp4_files import DEFAULT_ROOT, find_mp4_files
 
 
 def main():

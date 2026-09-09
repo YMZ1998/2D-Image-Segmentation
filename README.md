@@ -1,5 +1,32 @@
 # 2D-Image-Segmentation
 
+OCT single-channel semantic segmentation for background, plaque, Stent, and InvalidRegion.
+
+## Repository layout
+
+```text
+2D-Image-Segmentation/
+├── apps/                 # Qt image, mask, prediction, and MP4 viewers
+├── docs/                 # Training guide and generated file lists
+├── network/              # Segmentation model definitions
+├── scripts/
+│   ├── data_tools/       # Extraction, mask conversion, split, and augmentation
+│   ├── inference/        # Single-image PyTorch and ONNX inference
+│   └── development/      # Diagnostics and experimental utilities
+├── utils/                # Dataset, preprocessing, loss, and evaluation modules
+├── 01_extract_annotated_images.py
+├── 02_prepare_oct_training_data.py
+├── 03_augment_oct_training_data.py
+├── 04_convert_onnx.py
+├── train.py              # Training entry point
+├── test.py               # Evaluation entry point
+├── parse_args.py         # Shared CLI and model construction
+├── segmentation_config.py
+└── inference_utils.py
+```
+
+Detailed training instructions are in [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md).
+
 ## Usage
 
 export environment
@@ -29,37 +56,31 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 ## Data pipeline and training
 
-The training pipeline uses single-channel 1024 x 1024 images and four classes:
-background, plaque, Stent, and InvalidRegion.
-Create the augmented dataset first:
+The training pipeline uses single-channel images and four classes: background,
+plaque, Stent, and InvalidRegion. Run the numbered data pipeline from the repository root:
 
 ```powershell
-python augment_with_imgaug.py
+python 01_extract_annotated_images.py
+python 02_prepare_oct_training_data.py
+python 03_augment_oct_training_data.py
 ```
 
-Running training automatically performs a leakage-safe 80/20 split by original source image,
-resizes images and masks to 704 x 704, and writes the prepared dataset to `data/dataset`:
+Train and evaluate the generated `data/oct_augmented_dataset`:
 
 ```powershell
-python train.py --arch unet --batch_size 8
+python train.py --arch unet --batch_size 4
+python test.py --arch unet --batch_size 4
 ```
 
-To prepare the split without starting training:
+Useful viewers and inference commands:
 
 ```powershell
-python prepare_training_data.py
-```
-
-To reuse an existing prepared split without rebuilding it:
-
-```powershell
-python train.py --skip_data_prepare
-```
-
-Evaluate the saved best checkpoint on the prepared test set:
-
-```powershell
-python test.py
+python apps/inference_viewer.py
+python apps/overlay_viewer.py
+python apps/mp4_viewer.py
+python scripts/inference/predict_single.py path/to/image.png --arch unet
+python scripts/inference/predict_single_onnx.py path/to/image.png
+python 04_convert_onnx.py --arch unet
 ```
 
 ## Reference

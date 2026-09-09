@@ -159,7 +159,7 @@ def train():
                     f"best_miou: {best_miou * 100:.2f}\n"
         f.write(best_info)
 
-    from plot import loss_plot, metrics_plot
+    from utils.plotting import loss_plot, metrics_plot
     loss_plot(args, train_losses, val_losses)
     metrics_plot(args, "dice", dices)
     metrics_plot(args, "miou", mious)

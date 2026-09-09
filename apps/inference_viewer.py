@@ -2,6 +2,10 @@ import sys
 import time
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 from PIL import Image
 from PyQt5.QtCore import QEvent, QSettings, QTimer, Qt
@@ -27,7 +31,7 @@ from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
 from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES, IMAGE_SIZE
 
 DEFAULT_IMAGE_DIR = Path(r"D:\data\OCT")
-
+model_path = newest_onnx(Path("../save_weights"))
 # OCT 圆环参数
 OCT_OUTER_RADIUS_RATIO = 0.49
 
@@ -383,8 +387,6 @@ class OverlayViewer(QMainWindow):
 
         try:
             import onnxruntime as ort
-
-            model_path = newest_onnx()
 
             if self.onnx_session is None or model_path != self.onnx_model_path:
                 providers = ["CPUExecutionProvider"]

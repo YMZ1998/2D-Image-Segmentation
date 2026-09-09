@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from dir_process import remove_and_create_dir
+from scripts.data_tools.common import remove_and_create_dir
 from inference_utils import clean_circular_roi
 from segmentation_config import CLASS_ID_TO_MASK_VALUE
 # LabelMe source label -> contiguous training class ID.

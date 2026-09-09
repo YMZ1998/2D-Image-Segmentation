@@ -22,8 +22,8 @@
 生成默认 704 分辨率的数据：
 
 ```powershell
-python prepare_training_data.py
-python train.py --skip_data_prepare
+python 02_prepare_oct_training_data.py
+python train.py
 ```
 
 ## 3. 阳性与正常数据
@@ -44,10 +44,10 @@ python train.py --skip_data_prepare
 
 OCT 圆形有效视野外的时间、患者信息、医院信息、设备信息和 Logo 与分割任务无关，也可能造成隐私泄露和特征污染。
 
-`augment_with_imgaug.py` 会在增强前创建居中的圆形 ROI，将圆外图像和 mask 全部置零，并在增强后再次清理圆外区域。默认圆半径为图像短边的 `0.475` 倍：
+`scripts/data_tools/augment_with_imgaug.py` 会在增强前创建居中的圆形 ROI，将圆外图像和 mask 全部置零，并在增强后再次清理圆外区域。默认圆半径为图像短边的 `0.475` 倍：
 
 ```powershell
-python augment_with_imgaug.py --roi-radius-ratio 0.475
+python scripts/data_tools/augment_with_imgaug.py --roi-radius-ratio 0.475
 ```
 
 调整 ROI 后必须人工抽查，确认无效信息已完全移除且 OCT 有效区域没有被裁掉。
@@ -80,17 +80,17 @@ python augment_with_imgaug.py --roi-radius-ratio 0.475
 增强前会先将图像转换为单通道灰度图。几何增强对图像和 mask 使用同一组随机参数；亮度、对比度、模糊和噪声只作用于图像。默认每张原图生成 5 个增强版本，并保留清理后的原图：
 
 ```powershell
-python augment_with_imgaug.py
+python scripts/data_tools/augment_with_imgaug.py
 ```
 
 输出目录为 `data/augmented/images` 和 `data/augmented/masks`。
 
 ## 6. 训练集与测试集划分
 
-`prepare_training_data.py` 默认按原始样本 ID 做 `80%/20%` 划分。同一原图及其 `_augXX` 版本会进入同一集合，防止增强版本泄漏到测试集。
+`02_prepare_oct_training_data.py` 默认按原始样本 ID 做 `80%/20%` 划分。同一原图及其 `_augXX` 版本会进入同一集合，防止增强版本泄漏到测试集。
 
 ```powershell
-python prepare_training_data.py
+python 02_prepare_oct_training_data.py
 ```
 
 默认输出：
@@ -113,23 +113,29 @@ data/dataset/
 ```powershell
 conda activate AI
 
-# 1. 灰度增强并清除圆外无效信息
-python augment_with_imgaug.py
+# 1. 从 D:\data\OCT 提取已经标注的图像和 JSON
+python 01_extract_annotated_images.py
 
-# 2. 可选：单独划分并生成 704×704 数据
-python prepare_training_data.py
+# 2. 生成 mask、清理圆外区域并划分训练集/测试集
+python 02_prepare_oct_training_data.py
 
-# 3. 训练；默认会自动执行第 2 步
+# 3. 仅增强训练集，测试集保持原始数据
+python 03_augment_oct_training_data.py
+
+# 4. 训练
 python train.py --arch unet --batch_size 8
 
-# 4. 使用最佳权重测试
+# 5. 使用最佳权重测试
 python test.py --arch unet --batch_size 8
+
+# 6. 将最佳权重转换为 ONNX
+python 04_convert_onnx.py --arch unet
 ```
 
 使用最新权重对单张图像进行预测并显示：
 
 ```powershell
-python predict_single.py path/to/image.png --arch unet
+python scripts/inference/predict_single.py path/to/image.png --arch unet
 ```
 
 脚本默认加载 `save_weights/<arch>_<deep_supervision>_latest_model.pth`，并将类别 ID mask、彩色 mask 和半透明叠加图保存到 `predictions/`。使用 `--weights` 可指定其他 checkpoint，使用 `--no-show` 可只保存而不打开显示窗口。
@@ -163,7 +169,7 @@ EfficientUNet 的骨干首层已改为单通道卷积。使用 ImageNet 预训�
 5. OCT 圆外全部为零，不包含文字、Logo 或患者信息。
 6. 同一原图的增强版本没有跨训练集和测试集。
 7. 训练集和测试集均包含正常样本及目标类别。
-8. 使用 `qt_overlay_viewer.py` 抽查图像与 mask 的叠加位置。
+8. 使用 `apps/overlay_viewer.py` 抽查图像与 mask 的叠加位置。
 
 ## 9. 评估建议
 

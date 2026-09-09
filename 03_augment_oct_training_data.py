@@ -9,8 +9,8 @@ import imageio.v2 as imageio
 import numpy as np
 from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 
-from augment_with_imgaug import build_augmenter, circular_roi, clear_outside_roi
-from dir_process import remove_and_create_dir
+from scripts.data_tools.augment_with_imgaug import build_augmenter, circular_roi, clear_outside_roi
+from scripts.data_tools.common import remove_and_create_dir
 from segmentation_config import MASK_VALUE_TO_CLASS_ID
 
 
