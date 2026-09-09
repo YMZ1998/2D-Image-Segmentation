@@ -24,6 +24,8 @@ SOURCE_LABEL_TO_CLASS_ID = {
 }
 CLASS_NAMES = ("background", "plaque", "Stent", "InvalidRegion")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+REQUIRED_CLASS_ID = 3
+REQUIRED_MASK_VALUE = CLASS_ID_TO_MASK_VALUE[REQUIRED_CLASS_ID]
 
 
 def find_image(annotation: Path) -> Path:
@@ -74,6 +76,24 @@ def choose_test_groups(groups: list[str], ratio: float, seed: int) -> set[str]:
     return set(shuffled[:count])
 
 
+def delete_empty_sample(source: Path, image: Path, annotation: Path) -> None:
+    """Permanently delete an empty annotation and its source image."""
+    source = source.resolve()
+    targets = (image.resolve(), annotation.resolve())
+    for target in targets:
+        if source not in target.parents:
+            raise ValueError(f"Refusing to delete a file outside the input directory: {target}")
+
+    for target in targets:
+        target.unlink()
+
+    print(
+        "[删除] 空标注及其原始图像\n"
+        f"       图像: {targets[0]}\n"
+        f"       标注: {targets[1]}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Extracted"))
@@ -92,12 +112,29 @@ def main() -> None:
     filtered = Counter()
     for annotation in sorted(source.rglob("*.json")):
         data, reason = read_sample(annotation)
+        image = find_image(annotation)
         if reason:
             filtered[reason] += 1
+            if reason == "empty":
+                delete_empty_sample(source, image, annotation)
+            else:
+                print(
+                    "[跳过] 包含 object 标签\n"
+                    f"       图像: {image}\n"
+                    f"       标注: {annotation}"
+                )
             continue
-        image = find_image(annotation)
+        mask = draw_mask(data)
+        if REQUIRED_MASK_VALUE not in mask.getdata():
+            filtered["missing_class_3"] += 1
+            print(
+                f"[跳过] mask 中没有类别 {REQUIRED_CLASS_ID} ({CLASS_NAMES[REQUIRED_CLASS_ID]})\n"
+                f"       图像: {image}\n"
+                f"       标注: {annotation}"
+            )
+            continue
         group = annotation.relative_to(source).parts[0]
-        samples.append((group, image, annotation, data))
+        samples.append((group, image, annotation, mask))
     if not samples:
         raise RuntimeError("No valid annotated samples found")
 
@@ -113,7 +150,7 @@ def main() -> None:
         "samples": [],
     }
     try:
-        for group, image_path, annotation, data in samples:
+        for group, image_path, annotation, mask in samples:
             split = "test" if group in test_groups else "train"
             name = f"{group}_{image_path.stem}.png"
             image_output = output / split / "image" / name
@@ -124,7 +161,6 @@ def main() -> None:
                 gray = np.asarray(image.convert("L"))
                 cleaned = Image.fromarray(clean_circular_roi(gray))
                 cleaned.save(image_output)
-            mask = draw_mask(data)
             if mask.size != cleaned.size:
                 raise ValueError(
                     f"Image/annotation size mismatch: {image_path} {cleaned.size}, mask {mask.size}"
@@ -147,7 +183,10 @@ def main() -> None:
     counts = Counter(sample["split"] for sample in manifest["samples"])
     print(f"Generated {len(samples)} samples at {output}")
     print(f"train={counts['train']}, test={counts['test']}, test groups={sorted(test_groups)}")
-    print(f"filtered: object={filtered['object']}, empty={filtered['empty']}")
+    print(
+        f"filtered: object={filtered['object']}, empty={filtered['empty']}, "
+        f"missing_class_3={filtered['missing_class_3']}"
+    )
 
 
 if __name__ == "__main__":
