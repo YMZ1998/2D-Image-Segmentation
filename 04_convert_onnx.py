@@ -48,7 +48,7 @@ def convert_onnx():
                       onnx_file_name,  # where to save the model (can be a file or file-like object)
                       input_names=["input"],
                       output_names=["output"],
-                      opset_version=17,
+                      opset_version=18,
                       external_data=False,
                       verbose=False)
 

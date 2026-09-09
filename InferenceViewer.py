@@ -4,10 +4,23 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from PyQt5.QtCore import QEvent, QSettings, Qt
+from PyQt5.QtCore import QEvent, QSettings, QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, \
-    QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from inference_utils import create_pseudocolor as create_pseudocolor_array
 from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
@@ -25,10 +38,20 @@ class OverlayViewer(QMainWindow):
         self.setWindowTitle("OCT ONNX Inference Viewer")
         self.resize(1500, 900)
 
+        self._init_state()
+        self._init_playback()
+        self._build_ui()
+        self.refresh_samples()
+
+    # ------------------------------------------------------------------
+    # UI construction and application state
+    # ------------------------------------------------------------------
+    def _init_state(self) -> None:
         self.settings = QSettings("2D-Image-Segmentation", "OverlayViewer")
         saved_dir = Path(self.settings.value("image_dir", str(DEFAULT_IMAGE_DIR)))
         self.image_dir = saved_dir if saved_dir.is_dir() else (
-            DEFAULT_IMAGE_DIR if DEFAULT_IMAGE_DIR.is_dir() else Path.cwd())
+            DEFAULT_IMAGE_DIR if DEFAULT_IMAGE_DIR.is_dir() else Path.cwd()
+        )
         self.output_dir = self.image_dir / "overlays"
 
         self.source_image: Image.Image | None = None
@@ -41,6 +64,33 @@ class OverlayViewer(QMainWindow):
         self._source_bytes: bytes | None = None
         self._prediction_bytes: bytes | None = None
 
+    def _init_playback(self) -> None:
+        self.play_timer = QTimer(self)
+        self.play_timer.timeout.connect(self.advance_playback)
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout()
+        layout.addLayout(self._build_directory_controls())
+        layout.addLayout(self._build_action_controls())
+
+        self.legend = QLabel(self.build_legend_text())
+        self.legend.setStyleSheet("color:#555;padding:4px;")
+        layout.addWidget(self.legend)
+
+        layout.addLayout(self._build_image_panel(), 1)
+
+        self.pixel_label = QLabel("将鼠标悬浮在图片上查看像素值")
+        self.pixel_label.setStyleSheet(
+            "font-family:Consolas,'Microsoft YaHei';padding:6px 10px;"
+            "background:#f2f2f2;border:1px solid #d0d0d0;"
+        )
+        layout.addWidget(self.pixel_label)
+
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
+
+    def _build_directory_controls(self) -> QHBoxLayout:
         self.directory_label = QLabel(str(self.image_dir.resolve()))
         self.directory_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.directory_label.setStyleSheet("padding:5px;background:#f2f2f2;border:1px solid #d0d0d0;")
@@ -52,7 +102,9 @@ class OverlayViewer(QMainWindow):
         directory_layout.addWidget(QLabel("图片目录："))
         directory_layout.addWidget(self.directory_label, 1)
         directory_layout.addWidget(choose_button)
+        return directory_layout
 
+    def _build_action_controls(self) -> QHBoxLayout:
         self.sample_box = QComboBox()
         self.sample_box.currentIndexChanged.connect(self.load_selected_sample)
 
@@ -74,6 +126,28 @@ class OverlayViewer(QMainWindow):
         self.predict_button = QPushButton("ONNX 预测")
         self.predict_button.clicked.connect(self.run_onnx_prediction)
 
+        self.play_button = QPushButton("自动播放")
+        self.play_button.setCheckable(True)
+        self.play_button.toggled.connect(self.toggle_autoplay)
+
+        self.auto_predict_box = QCheckBox("播放时自动预测")
+        self.auto_predict_box.setChecked(
+            self.settings.value("auto_predict", True, type=bool)
+        )
+        self.auto_predict_box.toggled.connect(
+            lambda enabled: self.settings.setValue("auto_predict", enabled)
+        )
+
+        self.play_interval = QSpinBox()
+        self.play_interval.setRange(100, 10000)
+        self.play_interval.setSingleStep(100)
+        self.play_interval.setSuffix(" ms")
+        self.play_interval.setValue(
+            self.settings.value("play_interval_ms", 1000, type=int)
+        )
+        self.play_interval.setToolTip("相邻图片开始播放的时间间隔")
+        self.play_interval.valueChanged.connect(self.update_play_interval)
+
         save_button = QPushButton("保存预测叠加图")
         save_button.clicked.connect(self.save_overlay)
 
@@ -87,11 +161,13 @@ class OverlayViewer(QMainWindow):
         controls.addWidget(self.alpha_slider, 1)
         controls.addWidget(self.alpha_label)
         controls.addWidget(self.predict_button)
+        controls.addWidget(self.play_button)
+        controls.addWidget(self.auto_predict_box)
+        controls.addWidget(self.play_interval)
         controls.addWidget(save_button)
+        return controls
 
-        self.legend = QLabel(self.build_legend_text())
-        self.legend.setStyleSheet("color:#555;padding:4px;")
-
+    def _build_image_panel(self) -> QHBoxLayout:
         self.image_label = QLabel("目录中没有 PNG 图片")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(400, 400)
@@ -123,23 +199,7 @@ class OverlayViewer(QMainWindow):
         image_layout = QHBoxLayout()
         image_layout.addLayout(left_layout, 1)
         image_layout.addLayout(right_layout, 1)
-
-        self.pixel_label = QLabel("将鼠标悬浮在图片上查看像素值")
-        self.pixel_label.setStyleSheet(
-            "font-family:Consolas,'Microsoft YaHei';padding:6px 10px;background:#f2f2f2;border:1px solid #d0d0d0;")
-
-        layout = QVBoxLayout()
-        layout.addLayout(directory_layout)
-        layout.addLayout(controls)
-        layout.addWidget(self.legend)
-        layout.addLayout(image_layout, 1)
-        layout.addWidget(self.pixel_label)
-
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
-
-        self.refresh_samples()
+        return image_layout
 
     @staticmethod
     def build_legend_text() -> str:
@@ -148,10 +208,14 @@ class OverlayViewer(QMainWindow):
             items.append(f"{CLASS_NAMES[class_id]} RGB={CLASS_COLORS[class_id]}")
         return "    ".join(items) if items else "无分割类别"
 
+    # ------------------------------------------------------------------
+    # Image directory and sample loading
+    # ------------------------------------------------------------------
     def choose_image_dir(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "选择包含 PNG 图片的目录", str(self.image_dir.resolve()))
         if not selected:
             return
+        self.stop_autoplay()
         self.image_dir = Path(selected).resolve()
         self.output_dir = self.image_dir / "overlays"
         self.settings.setValue("image_dir", str(self.image_dir))
@@ -177,6 +241,9 @@ class OverlayViewer(QMainWindow):
         self.statusBar().showMessage(f"找到 {len(samples)} 张 PNG 图片", 3000)
         self.load_selected_sample()
 
+        if not samples:
+            self.stop_autoplay()
+
     def load_selected_sample(self) -> None:
         name = self.sample_box.currentText()
         if not name:
@@ -201,24 +268,9 @@ class OverlayViewer(QMainWindow):
         gray = np.asarray(image.convert("L"))
         return Image.fromarray(create_pseudocolor_array(gray)).convert("RGBA")
 
-    @staticmethod
-    def mask_oct_region(gray: np.ndarray) -> np.ndarray:
-        """只保留 OCT 圆环区域，外圆之外和中心无效圆全部置 0。"""
-        h, w = gray.shape
-        cx = w / 2.0
-        cy = h / 2.0
-
-        base_size = min(w, h)
-        outer_radius = base_size * OCT_OUTER_RADIUS_RATIO
-
-        yy, xx = np.ogrid[:h, :w]
-        dist2 = (xx - cx) ** 2 + (yy - cy) ** 2
-        mask = (dist2 <= outer_radius ** 2)
-
-        result = np.zeros_like(gray)
-        result[mask] = gray[mask]
-        return result
-
+    # ------------------------------------------------------------------
+    # Image display and overlay rendering
+    # ------------------------------------------------------------------
     def toggle_pseudocolor(self, enabled: bool) -> None:
         self.pseudocolor_button.setText("恢复原始图" if enabled else "转换伪彩色")
         self.update_source_image()
@@ -288,9 +340,42 @@ class OverlayViewer(QMainWindow):
         if hasattr(self, "prediction_title"):
             self.prediction_title.setText("ONNX 预测")
 
-    def run_onnx_prediction(self) -> None:
+    # ------------------------------------------------------------------
+    # ONNX inference and OCT region masking
+    # ------------------------------------------------------------------
+    @staticmethod
+    def mask_oct_region(gray: np.ndarray) -> np.ndarray:
+        """只保留 OCT 圆环区域，外圆之外和中心无效圆全部置 0。"""
+        h, w = gray.shape
+        cx = w / 2.0
+        cy = h / 2.0
+        outer_radius = min(w, h) * OCT_OUTER_RADIUS_RATIO
+
+        yy, xx = np.ogrid[:h, :w]
+        valid = (xx - cx) ** 2 + (yy - cy) ** 2 <= outer_radius ** 2
+
+        result = np.zeros_like(gray)
+        result[valid] = gray[valid]
+        return result
+
+    @staticmethod
+    def mask_prediction_region(mask: np.ndarray) -> np.ndarray:
+        """预测结果同样只保留 OCT 圆环区域。"""
+        h, w = mask.shape
+        cx = w / 2.0
+        cy = h / 2.0
+        outer_radius = min(w, h) * OCT_OUTER_RADIUS_RATIO
+
+        yy, xx = np.ogrid[:h, :w]
+        valid = (xx - cx) ** 2 + (yy - cy) ** 2 <= outer_radius ** 2
+
+        result = np.zeros_like(mask)
+        result[valid] = mask[valid]
+        return result
+
+    def run_onnx_prediction(self) -> bool:
         if self.source_image is None:
-            return
+            return False
 
         self.predict_button.setEnabled(False)
         self.predict_button.setText("预测中…")
@@ -341,32 +426,67 @@ class OverlayViewer(QMainWindow):
             provider = self.onnx_session.get_providers()[0]
             self.prediction_title.setText(f"ONNX 预测 · {provider} · {elapsed_ms:.1f} ms")
             self.statusBar().showMessage(f"预测完成：{model_path.name}", 5000)
+            return True
 
         except Exception as error:
+            self.stop_autoplay()
             QMessageBox.critical(self, "ONNX 预测失败", str(error))
+            return False
 
         finally:
             self.predict_button.setEnabled(True)
             self.predict_button.setText("ONNX 预测")
 
-    @staticmethod
-    def mask_prediction_region(mask: np.ndarray) -> np.ndarray:
-        """预测结果同样只保留 OCT 圆环区域。"""
-        h, w = mask.shape
-        cx = w / 2.0
-        cy = h / 2.0
+    # ------------------------------------------------------------------
+    # Automatic playback
+    # ------------------------------------------------------------------
+    def toggle_autoplay(self, enabled: bool) -> None:
+        if not enabled:
+            self.play_timer.stop()
+            self.play_button.setText("自动播放")
+            self.statusBar().showMessage("已停止自动播放", 2000)
+            return
 
-        base_size = min(w, h)
-        outer_radius = base_size * OCT_OUTER_RADIUS_RATIO
+        if self.sample_box.count() == 0:
+            self.stop_autoplay()
+            QMessageBox.information(self, "提示", "当前目录中没有可播放的 PNG 图片")
+            return
 
-        yy, xx = np.ogrid[:h, :w]
-        dist2 = (xx - cx) ** 2 + (yy - cy) ** 2
-        valid = (dist2 <= outer_radius ** 2)
+        self.play_button.setText("停止播放")
 
-        result = np.zeros_like(mask)
-        result[valid] = mask[valid]
-        return result
+        # 开始播放时先预测当前图片，随后由定时器循环切换图片。
+        if self.auto_predict_box.isChecked() and not self.run_onnx_prediction():
+            return
 
+        self.play_timer.start(self.play_interval.value())
+        self.statusBar().showMessage("正在自动播放", 2000)
+
+    def stop_autoplay(self) -> None:
+        self.play_timer.stop()
+        if not hasattr(self, "play_button"):
+            return
+        self.play_button.blockSignals(True)
+        self.play_button.setChecked(False)
+        self.play_button.setText("自动播放")
+        self.play_button.blockSignals(False)
+
+    def advance_playback(self) -> None:
+        if self.sample_box.count() == 0:
+            self.stop_autoplay()
+            return
+
+        self.change_sample(1)
+        if self.auto_predict_box.isChecked():
+            self.run_onnx_prediction()
+
+    def update_play_interval(self, interval_ms: int) -> None:
+        self.settings.setValue("play_interval_ms", interval_ms)
+        if self.play_timer.isActive():
+            self.play_timer.setInterval(interval_ms)
+
+    # ------------------------------------------------------------------
+    # Mouse, wheel, and resize interaction
+    # ------------------------------------------------------------------
     def eventFilter(self, watched, event):
         if watched is self.image_label:
             if event.type() == QEvent.MouseMove:
@@ -433,6 +553,9 @@ class OverlayViewer(QMainWindow):
         if self.prediction_rendered is not None:
             self.set_label_image(self.prediction_label, self.prediction_rendered, False)
 
+    # ------------------------------------------------------------------
+    # Output
+    # ------------------------------------------------------------------
     def save_overlay(self) -> None:
         if self.prediction_rendered is None:
             QMessageBox.information(self, "提示", "请先执行 ONNX 预测")
