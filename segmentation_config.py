@@ -4,6 +4,8 @@ IMAGE_SIZE = 1024
 ROI_RADIUS_RATIO = 0.475
 
 CLASS_NAMES = ("background", "plaque", "Stent", "InvalidRegion")
+CLASS_LOSS_WEIGHTS = (1.0, 4.0, 8.0, 1.0)
+PRIMARY_CLASS_IDS = (1, 2)
 CLASS_COLORS = (
     (0, 0, 0),
     (255, 0, 0),

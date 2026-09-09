@@ -9,7 +9,7 @@ from torch.nn.functional import cross_entropy
 import utils.distributed_utils as utils
 from utils.loss import build_target
 from utils.tversky_loss import TverskyLoss
-from segmentation_config import CLASS_NAMES
+from segmentation_config import CLASS_LOSS_WEIGHTS, CLASS_NAMES, PRIMARY_CLASS_IDS
 
 mse_loss = MSELoss(size_average=True)
 kl_loss = KLDivLoss(size_average=True)
@@ -23,8 +23,14 @@ def criterion(inputs, target, num_classes: int = 3):
     if not isinstance(inputs, dict):
         inputs = {'out': inputs}
     target = build_target(target, num_classes, ignore_index=-1)
-    loss_weight = torch.as_tensor([1] + [2] * (num_classes - 1), dtype=inputs['out'].dtype,
-                                  device=inputs['out'].device)
+    if num_classes != len(CLASS_LOSS_WEIGHTS):
+        raise ValueError(
+            f"Expected {len(CLASS_LOSS_WEIGHTS)} classes for configured loss weights, "
+            f"got {num_classes}"
+        )
+    loss_weight = torch.as_tensor(
+        CLASS_LOSS_WEIGHTS, dtype=inputs['out'].dtype, device=inputs['out'].device
+    )
     for name, x in inputs.items():
         a = 0.3
         # losses[name] = tversky_loss(x, target)
@@ -61,8 +67,8 @@ def evaluate(epoch_num, model, data_loader, device, num_classes):
             data_loader.desc = f"[val epoch {epoch_num}] loss: {np.mean(val_loss):.4f}"
         confmat.reduce_from_all_processes()
     dice_per_class = confmat.get_dice_per_class()
-    foreground_dice = torch.nanmean(dice_per_class[1:]).item()
-    return confmat, foreground_dice, np.mean(val_loss), confmat.get_miou(), dice_per_class.cpu().tolist()
+    primary_dice = torch.nanmean(dice_per_class[list(PRIMARY_CLASS_IDS)]).item()
+    return confmat, primary_dice, np.mean(val_loss), confmat.get_miou(), dice_per_class.cpu().tolist()
 
 
 def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classes,
@@ -103,8 +109,8 @@ def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classe
     lr = optimizer.param_groups[0]["lr"]
     confmat.reduce_from_all_processes()
     dice_per_class = confmat.get_dice_per_class()
-    foreground_dice = torch.nanmean(dice_per_class[1:]).item()
-    return np.mean(train_loss), foreground_dice, confmat.get_miou(), lr, dice_per_class.cpu().tolist()
+    primary_dice = torch.nanmean(dice_per_class[list(PRIMARY_CLASS_IDS)]).item()
+    return np.mean(train_loss), primary_dice, confmat.get_miou(), lr, dice_per_class.cpu().tolist()
     # return np.mean(train_loss), dice.value.item(), confmat.get_miou(), lr
 
 

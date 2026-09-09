@@ -76,7 +76,7 @@ def train():
         if args.amp:
             scaler.load_state_dict(checkpoint["scaler"])
         print(">" * 10, 'load best weight:', weights_path)
-    best_dice = 0.
+    best_dice = -1.
     best_miou = 0.
     best_epoch = 1
     start_time = time.time()
@@ -105,7 +105,7 @@ def train():
         print(f"train_loss: {train_loss:.4f}\n"
               # f"train_miou: {train_miou * 100:.2f}\n"
               f"val_loss: {val_loss:.4f}\n"
-              f"val_dice: {val_dice * 100:.2f}\n"
+              f"val_plaque_stent_dice: {val_dice * 100:.2f}\n"
               f"val_miou: {val_miou * 100:.2f}\n"
               f"train Dice per class: {train_dice_text}\n"
               f"val Dice per class:   {val_dice_text}")
@@ -130,7 +130,7 @@ def train():
                          f"lr: {lr:.6f}\n" \
                          f"train_loss: {train_loss:.4f}\n" \
                          f"val_loss: {val_loss:.4f}\n" \
-                         f"val_dice: {val_dice * 100:.2f}\n" \
+                         f"val_plaque_stent_dice: {val_dice * 100:.2f}\n" \
                          f"val_miou: {val_miou * 100:.2f}\n" \
                          f"train_dice_per_class: {train_dice_text}\n" \
                          f"val_dice_per_class: {val_dice_text}\n"
@@ -138,7 +138,7 @@ def train():
         torch.save(model.state_dict(), get_latest_weight_path(args))
 
         if args.save_best is True:
-            if best_miou <= val_miou:
+            if best_dice <= val_dice:
                 best_miou = val_miou
                 best_dice = val_dice
                 best_epoch = epoch
