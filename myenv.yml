@@ -391,4 +391,3 @@ dependencies:
       - wslink==1.12.4
       - yarl==1.9.4
       - zope.interface==6.2
-prefix: /home/lij/anaconda3/envs/lj_py

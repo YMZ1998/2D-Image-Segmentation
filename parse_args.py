@@ -35,12 +35,12 @@ efficientnet_dict = ['efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2',
 
 
 def get_model(args, pretrain_backbone=True):
-    print('★'*30)
+    print('★' * 30)
     print(f'model:{args.arch}\n'
           f'epoch:{args.epochs}\n'
           f'batch size:{args.batch_size}\n'
           f'image size:{args.image_size}')
-    print('★'*30)
+    print('★' * 30)
     device = get_device(args.device)
     if args.arch == 'unet':
         model = UNet(in_channels=args.in_channels, num_classes=args.num_classes, base_c=32).to(device)
@@ -54,8 +54,7 @@ def get_model(args, pretrain_backbone=True):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="pytorch training")
-    parser.add_argument('--arch', '-a', metavar='ARCH', default='efficientnet_b1',
-                        help='unet/mobilenet/efficientnet_b1/efficientnet_v2_s/UDTransNet/ETransUNet')
+    parser.add_argument('--arch', '-a', metavar='ARCH', default='efficientnet_b1', help='unet/efficientnet_b1')
     parser.add_argument("--data_path", default="data/oct_augmented_dataset",
                         help="augmented dataset root containing train/ and test/")
     parser.add_argument("--num_classes", default=len(CLASS_NAMES), type=int)
@@ -79,6 +78,7 @@ def parse_args():
     args = parser.parse_args()
 
     return args
+
 
 if __name__ == '__main__':
     args = parse_args()

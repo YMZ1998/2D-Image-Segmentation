@@ -5,8 +5,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt
-from PyQt5.QtGui import QImage, QKeySequence, QPixmap
+from PyQt5.QtCore import QEvent, QPoint, QSettings, QSize, Qt
+from PyQt5.QtGui import QFont, QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -21,7 +21,8 @@ from PyQt5.QtWidgets import (
     QShortcut,
     QSlider,
     QStyle,
-    QToolButton,
+    QStyleOption,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
@@ -33,7 +34,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from inference_utils import create_pseudocolor as create_pseudocolor_array
 from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
 from segmentation_config import (
     CLASS_COLORS,
@@ -47,6 +47,42 @@ SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 # OCT 有效圆区域
 OCT_OUTER_RADIUS_RATIO = 0.49
+
+
+class PannableImageLabel(QLabel):
+    """QLabel that draws its pixmap with a controllable center offset."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.pan_offset = QPoint()
+
+    def set_pan_offset(self, offset: QPoint) -> QPoint:
+        pixmap = self.pixmap()
+        if pixmap is None or pixmap.isNull():
+            self.pan_offset = QPoint()
+        else:
+            limit_x = max(0, (pixmap.width() - self.width()) // 2)
+            limit_y = max(0, (pixmap.height() - self.height()) // 2)
+            self.pan_offset = QPoint(
+                min(limit_x, max(-limit_x, offset.x())),
+                min(limit_y, max(-limit_y, offset.y())),
+            )
+        self.update()
+        return QPoint(self.pan_offset)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt API name)
+        pixmap = self.pixmap()
+        if pixmap is None or pixmap.isNull():
+            super().paintEvent(event)
+            return
+
+        option = QStyleOption()
+        option.initFrom(self)
+        painter = QStylePainter(self)
+        painter.drawPrimitive(QStyle.PE_Widget, option)
+        x = (self.width() - pixmap.width()) // 2 + self.pan_offset.x()
+        y = (self.height() - pixmap.height()) // 2 + self.pan_offset.y()
+        painter.drawPixmap(x, y, pixmap)
 
 
 class OverlayViewer(QMainWindow):
@@ -73,6 +109,7 @@ class OverlayViewer(QMainWindow):
         self._build_ui()
         self._init_shortcuts()
         self._update_status_bar()
+        self.load_remembered_image()
 
     # ==================================================================
     # State
@@ -90,9 +127,14 @@ class OverlayViewer(QMainWindow):
         saved_model = Path(self.settings.value("onnx_model", ""))
         self.selected_model_path = saved_model if saved_model.is_file() else None
 
+        saved_image = Path(self.settings.value("last_image", ""))
+        self.remembered_image_path = saved_image if saved_image.is_file() else None
+
         self.image_path: Path | None = None
+        self._indexed_directory: Path | None = None
+        self._directory_images: list[Path] = []
+        self._directory_index = -1
         self.source_image: Image.Image | None = None
-        self.pseudocolor_image: Image.Image | None = None
         self.prediction_mask: Image.Image | None = None
         self.prediction_rendered: Image.Image | None = None
 
@@ -100,6 +142,8 @@ class OverlayViewer(QMainWindow):
         self.onnx_model_path: Path | None = None
 
         self.zoom_factor = 1.0
+        self.pan_offset = QPoint()
+        self._pan_drag_position: QPoint | None = None
         self.last_inference_ms: float | None = None
 
         # Keep image byte buffers alive for QImage safety.
@@ -108,8 +152,11 @@ class OverlayViewer(QMainWindow):
 
     def _init_shortcuts(self) -> None:
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_image_file)
-        QShortcut(QKeySequence("F5"), self, activated=self.run_onnx_prediction)
+        self.inference_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.inference_shortcut.activated.connect(self.run_onnx_prediction)
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_onnx_model)
+        QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self.change_image(-1))
+        QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self.change_image(1))
 
     # ==================================================================
     # UI
@@ -177,51 +224,7 @@ class OverlayViewer(QMainWindow):
 
         row.addStretch(1)
 
-        open_btn = self._header_button(
-            "打开图像",
-            self.style().standardIcon(QStyle.SP_DialogOpenButton),
-            self.choose_image_file,
-            "Ctrl+O",
-        )
-        row.addWidget(open_btn)
-
-        run_btn = self._header_button(
-            "运行推理",
-            self.style().standardIcon(QStyle.SP_MediaPlay),
-            self.run_onnx_prediction,
-            "F5",
-            primary=True,
-        )
-        self.header_run_button = run_btn
-        row.addWidget(run_btn)
-
-        settings_btn = self._header_button(
-            "设置",
-            self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
-            self.choose_onnx_model,
-            "Ctrl+M",
-        )
-        row.addWidget(settings_btn)
-
         return header
-
-    def _header_button(
-        self,
-        text: str,
-        icon,
-        slot,
-        shortcut: str = "",
-        primary: bool = False,
-    ) -> QPushButton:
-        button = QPushButton(text)
-        button.setObjectName("headerPrimaryButton" if primary else "headerButton")
-        button.setIcon(icon)
-        button.setIconSize(QSize(15, 15))
-        button.setFixedHeight(32)
-        if shortcut:
-            button.setToolTip(f"{text}    {shortcut}")
-        button.clicked.connect(slot)
-        return button
 
     # ------------------------------------------------------------------
     # Left sidebar
@@ -244,7 +247,7 @@ class OverlayViewer(QMainWindow):
         choose_image_btn.clicked.connect(self.choose_image_file)
         layout.addWidget(choose_image_btn)
 
-        self.image_path_label = QLabel("未选择图像")
+        self.image_path_label = QLabel("—")
         self.image_path_label.setObjectName("pathLabel")
         self.image_path_label.setWordWrap(True)
         self.image_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -314,11 +317,6 @@ class OverlayViewer(QMainWindow):
 
         layout.addStretch(1)
 
-        hint = QLabel("Ctrl+O 打开图像   ·   F5 运行推理")
-        hint.setObjectName("footerHint")
-        hint.setAlignment(Qt.AlignCenter)
-        layout.addWidget(hint)
-
         return sidebar
 
     # ------------------------------------------------------------------
@@ -352,7 +350,21 @@ class OverlayViewer(QMainWindow):
 
         layout.addLayout(header)
 
-        self.image_label = QLabel("请选择 OCT 图像")
+        # Match the prediction card's mode/opacity toolbar height so both
+        # image canvases always receive exactly the same display area.
+        original_toolbar = QWidget()
+        original_toolbar.setFixedHeight(30)
+        original_toolbar_layout = QHBoxLayout(original_toolbar)
+        original_toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        original_toolbar_layout.addStretch(1)
+        self.run_button = QPushButton("运行推理")
+        self.run_button.setObjectName("primaryButton")
+        self.run_button.setFixedWidth(108)
+        self.run_button.clicked.connect(self.run_onnx_prediction)
+        original_toolbar_layout.addWidget(self.run_button)
+        layout.addWidget(original_toolbar)
+
+        self.image_label = PannableImageLabel("未加载图像")
         self.image_label.setObjectName("imageCanvas")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(420, 420)
@@ -395,7 +407,10 @@ class OverlayViewer(QMainWindow):
 
         layout.addLayout(header1)
 
-        header2 = QHBoxLayout()
+        prediction_toolbar = QWidget()
+        prediction_toolbar.setFixedHeight(30)
+        header2 = QHBoxLayout(prediction_toolbar)
+        header2.setContentsMargins(0, 0, 0, 0)
         header2.setSpacing(8)
 
         self.view_mode_box = QComboBox()
@@ -421,9 +436,9 @@ class OverlayViewer(QMainWindow):
         self.alpha_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header2.addWidget(self.alpha_label)
 
-        layout.addLayout(header2)
+        layout.addWidget(prediction_toolbar)
 
-        self.prediction_label = QLabel("运行推理后显示 AI 分割结果")
+        self.prediction_label = PannableImageLabel("暂无预测结果")
         self.prediction_label.setObjectName("imageCanvas")
         self.prediction_label.setAlignment(Qt.AlignCenter)
         self.prediction_label.setMinimumSize(420, 420)
@@ -704,6 +719,22 @@ class OverlayViewer(QMainWindow):
 
         self.load_image(Path(selected).resolve())
 
+    def load_remembered_image(self) -> None:
+        """Restore one image from the last directory without preloading image data."""
+        candidate = self.remembered_image_path
+        if candidate is None or candidate.parent.resolve() != self.image_dir.resolve():
+            candidate = next(
+                (
+                    path.resolve()
+                    for path in sorted(self.image_dir.iterdir())
+                    if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+                ),
+                None,
+            ) if self.image_dir.is_dir() else None
+
+        if candidate is not None:
+            self.load_image(candidate)
+
     def load_image(self, path: Path) -> None:
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
             QMessageBox.warning(self, "提示", "请选择有效的 OCT 图像文件")
@@ -713,12 +744,14 @@ class OverlayViewer(QMainWindow):
             self.image_path = path
             self.image_dir = path.parent
             self.settings.setValue("image_dir", str(self.image_dir))
+            self.settings.setValue("last_image", str(path))
+            self.remembered_image_path = path
 
             self.source_image = Image.open(path).convert("RGBA")
-            self.pseudocolor_image = self.create_pseudocolor(self.source_image)
 
             self.clear_prediction()
             self.zoom_factor = 1.0
+            self.pan_offset = QPoint()
             self.last_inference_ms = None
 
             self.image_path_label.setText(str(path))
@@ -734,6 +767,34 @@ class OverlayViewer(QMainWindow):
 
         except Exception as error:
             QMessageBox.critical(self, "图像加载失败", str(error))
+
+    def change_image(self, step: int) -> None:
+        """Load the adjacent file without decoding the rest of the directory."""
+        if self.image_path is None:
+            return
+
+        directory = self.image_path.parent.resolve()
+        if directory != self._indexed_directory:
+            self._directory_images = [
+                path.resolve()
+                for path in sorted(directory.iterdir())
+                if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+            ]
+            self._indexed_directory = directory
+
+        if len(self._directory_images) < 2:
+            return
+
+        try:
+            current = self._directory_images.index(self.image_path.resolve())
+        except ValueError:
+            self._indexed_directory = None
+            self._directory_images = []
+            self._directory_index = -1
+            return
+
+        self._directory_index = (current + step) % len(self._directory_images)
+        self.load_image(self._directory_images[self._directory_index])
 
     def choose_onnx_model(self) -> None:
         start = (
@@ -791,11 +852,6 @@ class OverlayViewer(QMainWindow):
     # ==================================================================
     # Display
     # ==================================================================
-    @staticmethod
-    def create_pseudocolor(image: Image.Image) -> Image.Image:
-        gray = np.asarray(image.convert("L"))
-        return Image.fromarray(create_pseudocolor_array(gray)).convert("RGBA")
-
     def adjusted_gray(self) -> np.ndarray:
         if self.source_image is None:
             raise RuntimeError("没有加载图像")
@@ -850,7 +906,7 @@ class OverlayViewer(QMainWindow):
             if box is not None and not box.isChecked():
                 continue
 
-            class_values = CLASS_DISPLAY_VALUES[class_id]
+            class_values = self.class_display_values(class_id)
             rgb = CLASS_COLORS[class_id]
 
             lookup = [alpha if value in class_values else 0 for value in range(256)]
@@ -873,7 +929,7 @@ class OverlayViewer(QMainWindow):
             if box is not None and not box.isChecked():
                 continue
 
-            class_values = CLASS_DISPLAY_VALUES[class_id]
+            class_values = self.class_display_values(class_id)
             rgb = CLASS_COLORS[class_id]
 
             lookup = [255 if value in class_values else 0 for value in range(256)]
@@ -897,7 +953,7 @@ class OverlayViewer(QMainWindow):
 
         elif self.prediction_mask is None:
             self.prediction_label.clear()
-            self.prediction_label.setText("运行推理后显示 AI 分割结果")
+            self.prediction_label.setText("暂无预测结果")
             return
 
         elif mode == "Mask":
@@ -959,6 +1015,10 @@ class OverlayViewer(QMainWindow):
             )
 
         label.setPixmap(fit_pixmap)
+        if isinstance(label, PannableImageLabel):
+            effective_offset = label.set_pan_offset(self.pan_offset)
+            if source:
+                self.pan_offset = effective_offset
 
     def change_zoom(self, delta: float) -> None:
         self.zoom_factor = min(
@@ -978,6 +1038,7 @@ class OverlayViewer(QMainWindow):
 
     def reset_zoom(self) -> None:
         self.zoom_factor = 1.0
+        self.pan_offset = QPoint()
 
         if self.source_image is not None:
             self.update_source_image()
@@ -999,7 +1060,7 @@ class OverlayViewer(QMainWindow):
 
         if hasattr(self, "prediction_label"):
             self.prediction_label.clear()
-            self.prediction_label.setText("运行推理后显示 AI 分割结果")
+            self.prediction_label.setText("暂无预测结果")
 
         if hasattr(self, "inference_value"):
             self.inference_value.setText("—")
@@ -1055,8 +1116,8 @@ class OverlayViewer(QMainWindow):
             QMessageBox.information(self, "提示", "请先选择 OCT 图像")
             return False
 
-        self.header_run_button.setEnabled(False)
-        self.header_run_button.setText("推理中…")
+        self.run_button.setEnabled(False)
+        self.run_button.setText("推理中…")
         self.status_ready.setText("Inferencing")
         QApplication.processEvents()
 
@@ -1146,23 +1207,56 @@ class OverlayViewer(QMainWindow):
             return False
 
         finally:
-            self.header_run_button.setEnabled(True)
-            self.header_run_button.setText("运行推理")
+            self.run_button.setEnabled(True)
+            self.run_button.setText("运行推理")
+            QApplication.processEvents()
 
     # ==================================================================
     # Mouse interaction
     # ==================================================================
     def eventFilter(self, watched, event):
         if watched in (self.image_label, self.prediction_label):
-            if event.type() == QEvent.MouseMove:
+            if event.type() == QEvent.MouseButtonPress:
+                if (
+                    event.button() == Qt.LeftButton
+                    and event.modifiers() & Qt.ControlModifier
+                ):
+                    self._pan_drag_position = event.pos()
+                    watched.setCursor(Qt.ClosedHandCursor)
+                    event.accept()
+                    return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                if self._pan_drag_position is not None:
+                    self._pan_drag_position = None
+                    self.image_label.unsetCursor()
+                    self.prediction_label.unsetCursor()
+                    event.accept()
+                    return True
+            elif event.type() == QEvent.MouseMove:
+                if (
+                    self._pan_drag_position is not None
+                    and event.buttons() & Qt.LeftButton
+                ):
+                    delta = event.pos() - self._pan_drag_position
+                    self._pan_drag_position = event.pos()
+                    self.pan_offset += delta
+                    self.pan_offset = self.image_label.set_pan_offset(
+                        self.pan_offset
+                    )
+                    self.prediction_label.set_pan_offset(self.pan_offset)
+                    event.accept()
+                    return True
                 self.show_pixel_value(
                     watched,
                     event.pos().x(),
                     event.pos().y(),
                 )
             elif event.type() == QEvent.Wheel:
-                delta = 0.1 if event.angleDelta().y() > 0 else -0.1
-                self.change_zoom(delta)
+                wheel_up = event.angleDelta().y() > 0
+                if event.modifiers() & Qt.ControlModifier:
+                    self.change_zoom(0.1 if wheel_up else -0.1)
+                else:
+                    self.change_image(-1 if wheel_up else 1)
                 event.accept()
                 return True
             elif event.type() == QEvent.Leave:
@@ -1181,8 +1275,13 @@ class OverlayViewer(QMainWindow):
         if pixmap is None or self.source_image is None:
             return
 
-        offset_x = (label.width() - pixmap.width()) / 2
-        offset_y = (label.height() - pixmap.height()) / 2
+        pan_offset = (
+            label.pan_offset
+            if isinstance(label, PannableImageLabel)
+            else QPoint()
+        )
+        offset_x = (label.width() - pixmap.width()) / 2 + pan_offset.x()
+        offset_y = (label.height() - pixmap.height()) / 2 + pan_offset.y()
 
         local_x = mouse_x - offset_x
         local_y = mouse_y - offset_y
@@ -1211,10 +1310,8 @@ class OverlayViewer(QMainWindow):
             value = self.prediction_mask.getpixel((image_x, image_y))
             class_name = CLASS_NAMES[0]
 
-            for class_id in range(len(CLASS_NAMES)):
-                if value in CLASS_DISPLAY_VALUES[class_id]:
-                    class_name = CLASS_NAMES[class_id]
-                    break
+            if 0 <= value < len(CLASS_NAMES):
+                class_name = CLASS_NAMES[value]
 
             text += f"\nClass: {class_name}   Value: {value}"
 
@@ -1270,6 +1367,13 @@ class OverlayViewer(QMainWindow):
         self.status_size.setText(f"Size: {image_size}")
         self.status_inference.setText(f"Inference: {inference}")
 
+    @staticmethod
+    def class_display_values(class_id: int) -> frozenset[int]:
+        """Return accepted stored mask values, including background ID 0."""
+        if class_id == 0:
+            return frozenset({0})
+        return CLASS_DISPLAY_VALUES[class_id]
+
     # ==================================================================
     # Style
     # ==================================================================
@@ -1282,8 +1386,8 @@ class OverlayViewer(QMainWindow):
         QWidget#appRoot {
             background: #071624;
             color: #D5E2EC;
-            font-family: "Microsoft YaHei UI";
-            font-size: 11px;
+            font-family: "Segoe UI", "Microsoft YaHei UI";
+            font-size: 12px;
         }
 
         QLabel {
@@ -1302,19 +1406,19 @@ class OverlayViewer(QMainWindow):
 
         QLabel#logo {
             color: #1597E8;
-            font-size: 28px;
+            font-size: 30px;
             font-weight: 600;
         }
 
         QLabel#appTitle {
             color: #F0F6FA;
-            font-size: 16px;
+            font-size: 17px;
             font-weight: 600;
         }
 
         QLabel#appSubtitle {
             color: #70899B;
-            font-size: 9px;
+            font-size: 10px;
         }
 
         QPushButton#headerButton,
@@ -1323,7 +1427,7 @@ class OverlayViewer(QMainWindow):
             max-height: 32px;
             padding: 0 12px;
             border-radius: 4px;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 500;
         }
 
@@ -1366,41 +1470,36 @@ class OverlayViewer(QMainWindow):
 
         QLabel#sectionTitle {
             color: #E8F0F5;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
             padding: 2px 0 4px 0;
         }
 
         QLabel#panelTitle {
             color: #E8F0F5;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
         }
 
         QLabel#panelSubtitle {
             color: #8AA2B5;
-            font-size: 10px;
+            font-size: 11px;
         }
 
         QLabel#captionLabel {
             color: #8BA2B4;
-            font-size: 10px;
+            font-size: 11px;
         }
 
         QLabel#strongValue {
             color: #E5F2FB;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
         }
 
         QLabel#mutedLabel {
             color: #7F98AA;
-            font-size: 10px;
-        }
-
-        QLabel#footerHint {
-            color: #536D80;
-            font-size: 9px;
+            font-size: 11px;
         }
 
         QFrame#divider {
@@ -1420,7 +1519,7 @@ class OverlayViewer(QMainWindow):
             border: 1px solid #1B425E;
             border-radius: 4px;
             padding: 6px 7px;
-            font-size: 10px;
+            font-size: 11px;
         }
 
         /* ============================================================
@@ -1434,7 +1533,7 @@ class OverlayViewer(QMainWindow):
             background: #0F2A40;
             border: 1px solid #234B66;
             border-radius: 4px;
-            font-size: 10px;
+            font-size: 11px;
         }
 
         QPushButton:hover {
@@ -1644,6 +1743,7 @@ class OverlayViewer(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setFont(QFont("Segoe UI", 10))
 
     viewer = OverlayViewer()
     viewer.show()
