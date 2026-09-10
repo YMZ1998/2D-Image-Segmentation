@@ -9,7 +9,6 @@ from torchvision import ops
 from torchvision.models import efficientnet
 
 from network.PSAM import PSAModule
-# from network.RepNeXt import ChunkConv
 
 
 class IntermediateLayerGetter(nn.ModuleDict):
