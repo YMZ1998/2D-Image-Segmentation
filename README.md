@@ -32,23 +32,34 @@ Detailed training instructions are in [docs/TRAINING_GUIDE.md](docs/TRAINING_GUI
 export environment
 
 ```
+conda env list
 conda create -n AI python=3.10 -y
 conda activate AI
 conda env export -n AI > myenv.yml
+python -m pip freeze > requirements.txt
 ```
 
 create environment
 
 ```
 conda env create -f myenv.yml
-pip install -r requirements.txt
+```
+```
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 pip install
 
 ```
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple package-name
-pip install labelme -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pillow
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple onnxruntime
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple imageio
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple imgaug 
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pyqt5 
+
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple labelme
 
 python -m pip install torch torchvision
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
