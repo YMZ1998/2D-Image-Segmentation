@@ -98,8 +98,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Extracted"))
     parser.add_argument("--output", type=Path, default=Path("data/oct_dataset"))
-    parser.add_argument("--test-ratio", type=float, default=0.3)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--test-ratio", type=float, default=0.2)
+    parser.add_argument("--seed", type=int, default=11)
     args = parser.parse_args()
     source = args.input.resolve()
     output = args.output.resolve()
@@ -149,6 +149,7 @@ def main() -> None:
         "filtered": dict(filtered),
         "samples": [],
     }
+    print(manifest)
     try:
         for group, image_path, annotation, mask in samples:
             split = "test" if group in test_groups else "train"
@@ -171,7 +172,7 @@ def main() -> None:
                 "group": group,
                 "split": split,
                 "annotation": str(annotation),
-                "mask_values": sorted(set(mask.getdata())),
+                "mask_values": sorted(np.unique(np.asarray(mask)).astype(int).tolist()),
             })
         (output / "dataset_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
