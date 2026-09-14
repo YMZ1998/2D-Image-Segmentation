@@ -1,5 +1,7 @@
 import sys
 import time
+import hashlib
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +46,7 @@ from segmentation_config import (
 
 DEFAULT_IMAGE_DIR = Path(r"D:\data\OCT")
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+OVERLAY_CACHE_DIRNAME = "overlay"
 
 # OCT 有效圆区域
 OCT_OUTER_RADIUS_RATIO = 0.49
@@ -137,6 +140,8 @@ class OverlayViewer(QMainWindow):
         self.source_image: Image.Image | None = None
         self.prediction_mask: Image.Image | None = None
         self.prediction_rendered: Image.Image | None = None
+        self.overlay_dir = Path.cwd() / OVERLAY_CACHE_DIRNAME
+        self._reset_overlay_cache()
 
         self.onnx_session = None
         self.onnx_model_path: Path | None = None
@@ -154,6 +159,7 @@ class OverlayViewer(QMainWindow):
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_image_file)
         self.inference_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.inference_shortcut.activated.connect(self.run_onnx_prediction)
+        QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=self.run_all_predictions)
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_onnx_model)
         QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self.change_image(-1))
         QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self.change_image(1))
@@ -252,6 +258,13 @@ class OverlayViewer(QMainWindow):
         self.image_path_label.setWordWrap(True)
         self.image_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.image_path_label)
+
+        predict_all_btn = QPushButton("一键预测全部")
+        predict_all_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        predict_all_btn.setIconSize(QSize(14, 14))
+        predict_all_btn.clicked.connect(self.run_all_predictions)
+        layout.addWidget(predict_all_btn)
+        self.predict_all_button = predict_all_btn
 
         layout.addWidget(self._divider())
 
@@ -750,6 +763,7 @@ class OverlayViewer(QMainWindow):
             self.source_image = Image.open(path).convert("RGBA")
 
             self.clear_prediction()
+            self.load_cached_prediction(path)
             self.zoom_factor = 1.0
             self.pan_offset = QPoint()
             self.last_inference_ms = None
@@ -820,6 +834,7 @@ class OverlayViewer(QMainWindow):
 
         self.onnx_session = None
         self.onnx_model_path = None
+        self.clear_prediction()
 
         self._update_status_bar()
 
@@ -1076,6 +1091,66 @@ class OverlayViewer(QMainWindow):
         self._update_status_bar()
 
     # ==================================================================
+    # Overlay cache
+    # ==================================================================
+    def _reset_overlay_cache(self) -> None:
+        if self.overlay_dir.exists():
+            shutil.rmtree(self.overlay_dir)
+        self.overlay_dir.mkdir(parents=True, exist_ok=True)
+
+    def overlay_cache_path(
+        self,
+        image_path: Path,
+        model_path: Path | None = None,
+    ) -> Path:
+        model_key = model_path or self.selected_model_path or self.onnx_model_path
+        model_text = str(model_key.resolve()) if model_key else "auto"
+        cache_key = f"{image_path.resolve()}|{model_text}"
+        digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
+        return self.overlay_dir / f"{image_path.stem}_{digest}_mask.png"
+
+    def load_cached_prediction(self, image_path: Path) -> bool:
+        cache_path = self.overlay_cache_path(image_path)
+        if not cache_path.is_file():
+            return False
+
+        try:
+            cached = Image.open(cache_path).convert("L")
+            if self.source_image is not None and cached.size != self.source_image.size:
+                return False
+
+            self.prediction_mask = cached.copy()
+            self.last_inference_ms = None
+            self.update_prediction_stats(np.asarray(self.prediction_mask))
+            self.inference_value.setText("缓存")
+            self.render_prediction()
+            return True
+        except Exception:
+            return False
+
+    def save_cached_prediction(
+        self,
+        image_path: Path,
+        mask: Image.Image,
+        model_path: Path | None = None,
+    ) -> None:
+        self.overlay_dir.mkdir(parents=True, exist_ok=True)
+        mask.save(self.overlay_cache_path(image_path, model_path))
+
+    def update_prediction_stats(self, prediction: np.ndarray) -> None:
+        counts = np.bincount(
+            prediction.ravel(),
+            minlength=len(CLASS_NAMES),
+        )
+        total = max(1, prediction.size)
+
+        for class_id in range(len(CLASS_NAMES)):
+            count = int(counts[class_id])
+            ratio = count / total * 100.0
+
+            self.class_count_labels[class_id].setText(f"{count:,}")
+            self.class_ratio_labels[class_id].setText(f"{ratio:.1f}%")
+    # ==================================================================
     # OCT region masking
     # ==================================================================
     @staticmethod
@@ -1111,86 +1186,80 @@ class OverlayViewer(QMainWindow):
     # ==================================================================
     # ONNX Runtime CPU inference
     # ==================================================================
+    def ensure_onnx_session(self):
+        import onnxruntime as ort
+
+        model_path = self.resolve_onnx_model()
+
+        if self.onnx_session is None or model_path != self.onnx_model_path:
+            available = ort.get_available_providers()
+
+            if "CPUExecutionProvider" not in available:
+                raise RuntimeError("当前 ONNX Runtime 不支持 CPUExecutionProvider")
+
+            self.onnx_session = ort.InferenceSession(
+                str(model_path),
+                providers=["CPUExecutionProvider"],
+            )
+            self.onnx_model_path = model_path
+
+        return model_path, self.onnx_session
+
+    def predict_mask_for_image(self, image: Image.Image) -> tuple[Image.Image, float]:
+        if self.onnx_session is None:
+            raise RuntimeError("ONNX session 尚未初始化")
+
+        input_meta = self.onnx_session.get_inputs()[0]
+        gray = np.asarray(image.convert("L"))
+        gray = self.mask_oct_region(gray)
+
+        tensor, _, _ = prepare_onnx_input(
+            gray,
+            input_meta.shape,
+            IMAGE_SIZE,
+        )
+
+        start = time.perf_counter()
+        output = self.onnx_session.run(
+            None,
+            {input_meta.name: tensor},
+        )[0]
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+        prediction = onnx_output_to_mask(output)
+        prediction = np.asarray(
+            Image.fromarray(prediction).resize(
+                image.size,
+                Image.Resampling.NEAREST,
+            )
+        )
+        prediction = self.mask_prediction_region(prediction)
+
+        return Image.fromarray(prediction.astype(np.uint8), mode="L"), elapsed_ms
+
     def run_onnx_prediction(self) -> bool:
-        if self.source_image is None:
+        if self.source_image is None or self.image_path is None:
             QMessageBox.information(self, "提示", "请先选择 OCT 图像")
             return False
 
         self.run_button.setEnabled(False)
         self.run_button.setText("推理中…")
+        if hasattr(self, "predict_all_button"):
+            self.predict_all_button.setEnabled(False)
         self.status_ready.setText("Inferencing")
         QApplication.processEvents()
 
         try:
-            import onnxruntime as ort
+            model_path, session = self.ensure_onnx_session()
+            mask, elapsed_ms = self.predict_mask_for_image(self.source_image)
 
-            model_path = self.resolve_onnx_model()
-
-            if self.onnx_session is None or model_path != self.onnx_model_path:
-                available = ort.get_available_providers()
-
-                if "CPUExecutionProvider" not in available:
-                    raise RuntimeError("当前 ONNX Runtime 不支持 CPUExecutionProvider")
-
-                self.onnx_session = ort.InferenceSession(
-                    str(model_path),
-                    providers=["CPUExecutionProvider"],
-                )
-                self.onnx_model_path = model_path
-
-            input_meta = self.onnx_session.get_inputs()[0]
-
-            gray = np.asarray(self.source_image.convert("L"))
-            gray = self.mask_oct_region(gray)
-
-            tensor, _, _ = prepare_onnx_input(
-                gray,
-                input_meta.shape,
-                IMAGE_SIZE,
-            )
-
-            start = time.perf_counter()
-            output = self.onnx_session.run(
-                None,
-                {input_meta.name: tensor},
-            )[0]
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-
-            prediction = onnx_output_to_mask(output)
-            prediction = np.asarray(
-                Image.fromarray(prediction).resize(
-                    self.source_image.size,
-                    Image.Resampling.NEAREST,
-                )
-            )
-
-            prediction = self.mask_prediction_region(prediction)
-
-            self.prediction_mask = Image.fromarray(
-                prediction.astype(np.uint8),
-                mode="L",
-            )
-
+            self.prediction_mask = mask
             self.last_inference_ms = elapsed_ms
-
+            self.save_cached_prediction(self.image_path, mask, model_path)
             self.render_prediction()
+            self.update_prediction_stats(np.asarray(mask))
 
-            # Stats
-            counts = np.bincount(
-                prediction.ravel(),
-                minlength=len(CLASS_NAMES),
-            )
-            total = max(1, prediction.size)
-
-            for class_id in range(len(CLASS_NAMES)):
-                count = int(counts[class_id])
-                ratio = count / total * 100.0
-
-                self.class_count_labels[class_id].setText(f"{count:,}")
-                self.class_ratio_labels[class_id].setText(f"{ratio:.1f}%")
-
-            provider = self.onnx_session.get_providers()[0]
-
+            provider = session.get_providers()[0]
             self.provider_label.setText(provider)
             self.model_info_label.setText(str(model_path))
             self.model_value.setText(model_path.name)
@@ -1209,8 +1278,87 @@ class OverlayViewer(QMainWindow):
         finally:
             self.run_button.setEnabled(True)
             self.run_button.setText("运行推理")
+            if hasattr(self, "predict_all_button"):
+                self.predict_all_button.setEnabled(True)
             QApplication.processEvents()
 
+    def run_all_predictions(self) -> None:
+        if self.image_path is None:
+            QMessageBox.information(self, "提示", "请先选择 OCT 图像目录中的任意一张图像")
+            return
+
+        directory = self.image_path.parent.resolve()
+        image_paths = [
+            path.resolve()
+            for path in sorted(directory.iterdir())
+            if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+        ]
+        if not image_paths:
+            QMessageBox.information(self, "提示", "当前目录没有可预测的图像")
+            return
+
+        self.run_button.setEnabled(False)
+        if hasattr(self, "predict_all_button"):
+            self.predict_all_button.setEnabled(False)
+            self.predict_all_button.setText("批量中…")
+        self.status_ready.setText("Batch inferencing")
+        QApplication.processEvents()
+
+        completed = 0
+        failed: list[str] = []
+        total_ms = 0.0
+
+        try:
+            model_path, session = self.ensure_onnx_session()
+
+            for index, path in enumerate(image_paths, start=1):
+                self.status_ready.setText(f"Batch {index}/{len(image_paths)}")
+                QApplication.processEvents()
+
+                try:
+                    with Image.open(path) as image:
+                        source = image.convert("RGBA")
+                    mask, elapsed_ms = self.predict_mask_for_image(source)
+                    self.save_cached_prediction(path, mask, model_path)
+                    completed += 1
+                    total_ms += elapsed_ms
+
+                    if self.image_path is not None and path == self.image_path.resolve():
+                        self.prediction_mask = mask
+                        self.last_inference_ms = elapsed_ms
+                        self.render_prediction()
+                        self.update_prediction_stats(np.asarray(mask))
+                        self.inference_value.setText(f"{elapsed_ms:.1f} ms")
+                except Exception as error:
+                    failed.append(f"{path.name}: {error}")
+
+            provider = session.get_providers()[0]
+            self.provider_label.setText(provider)
+            self.model_info_label.setText(str(model_path))
+            self.model_value.setText(model_path.name)
+            self.device_value.setText("CPU")
+            self.status_ready.setText("Ready")
+            self._update_status_bar()
+
+            message = f"已完成 {completed}/{len(image_paths)} 张，缓存目录：{self.overlay_dir}"
+            if completed:
+                message += f"\n平均推理时间：{total_ms / completed:.1f} ms"
+            if failed:
+                message += "\n\n失败：\n" + "\n".join(failed[:10])
+                if len(failed) > 10:
+                    message += f"\n... 还有 {len(failed) - 10} 个失败"
+            QMessageBox.information(self, "批量预测完成", message)
+
+        except Exception as error:
+            self.status_ready.setText("Error")
+            QMessageBox.critical(self, "批量预测失败", str(error))
+
+        finally:
+            self.run_button.setEnabled(True)
+            if hasattr(self, "predict_all_button"):
+                self.predict_all_button.setEnabled(True)
+                self.predict_all_button.setText("一键预测全部")
+            QApplication.processEvents()
     # ==================================================================
     # Mouse interaction
     # ==================================================================
