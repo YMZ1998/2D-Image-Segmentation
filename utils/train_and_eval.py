@@ -81,7 +81,7 @@ def train_one_epoch(epoch_num, model, optimizer, data_loader, device, num_classe
     data_loader = tqdm.tqdm(data_loader, file=sys.stdout)
     for image, target in data_loader:
         image, target = image.to(device), target.to(device)
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.amp.autocast("cuda", enabled=scaler is not None):
             output = model(image)
             loss = criterion(output, target, num_classes=num_classes)
 
