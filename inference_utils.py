@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 
-from segmentation_config import CLASS_COLORS, CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO
+from segmentation_config import CLASS_COLORS, CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO, INNER_RADIUS, OUTER_RADIUS, \
+    ROI_INNER_RADIUS_RATIO
 
 
 def newest_onnx(directory: Path = Path("save_weights")) -> Path:
@@ -15,17 +16,58 @@ def newest_onnx(directory: Path = Path("save_weights")) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def clean_circular_roi(gray: np.ndarray, radius_ratio: float = ROI_RADIUS_RATIO) -> np.ndarray:
+# def clean_circular_roi(gray: np.ndarray, radius_ratio: float = ROI_RADIUS_RATIO) -> np.ndarray:
+#     if gray.ndim != 2:
+#         raise ValueError(f"Expected a 2D grayscale image, got shape {gray.shape}")
+#     if not 0 < radius_ratio <= 0.5:
+#         raise ValueError("radius_ratio must be in (0, 0.5]")
+#     height, width = gray.shape
+#     yy, xx = np.ogrid[:height, :width]
+#     radius = min(height, width) * radius_ratio
+#     roi = (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
+#     cleaned = gray.copy()
+#     cleaned[~roi] = 0
+#     return cleaned
+def clean_circular_roi(
+        gray: np.ndarray,
+        radius_ratio: float = ROI_RADIUS_RATIO,
+        inner_radius_ratio: float = ROI_INNER_RADIUS_RATIO,
+) -> np.ndarray:
     if gray.ndim != 2:
         raise ValueError(f"Expected a 2D grayscale image, got shape {gray.shape}")
+
     if not 0 < radius_ratio <= 0.5:
         raise ValueError("radius_ratio must be in (0, 0.5]")
+
+    if not 0 <= inner_radius_ratio < radius_ratio:
+        raise ValueError(
+            "inner_radius_ratio must be in [0, radius_ratio)"
+        )
+
     height, width = gray.shape
     yy, xx = np.ogrid[:height, :width]
-    radius = min(height, width) * radius_ratio
-    roi = (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
+
+    center_x = (width - 1) / 2
+    center_y = (height - 1) / 2
+
+    # # 外圆半径
+    # outer_radius = min(height, width) * radius_ratio
+    #
+    # # 内圆半径
+    # inner_radius = min(height, width) * inner_radius_ratio
+
+    distance_sq = (xx - center_x) ** 2 + (yy - center_y) ** 2
+
+    # 圆环区域：
+    # 内圆 <= 距离 <= 外圆
+    roi = (
+            (distance_sq <= OUTER_RADIUS ** 2)
+            & (distance_sq >= INNER_RADIUS ** 2)
+    )
+
     cleaned = gray.copy()
     cleaned[~roi] = 0
+
     return cleaned
 
 
@@ -44,7 +86,7 @@ def create_pseudocolor(gray: np.ndarray) -> np.ndarray:
         values = np.arange(start[0], end[0] + 1)
         ratio = (values - start[0]) / (end[0] - start[0])
         lookup[values] = np.asarray(start[1]) + ratio[:, None] * (
-            np.asarray(end[1]) - np.asarray(start[1])
+                np.asarray(end[1]) - np.asarray(start[1])
         )
     return lookup[gray]
 
@@ -54,7 +96,7 @@ def _fixed_dimension(value, fallback: int) -> int:
 
 
 def prepare_onnx_input(
-    gray: np.ndarray, shape: list, fallback_size: int = IMAGE_SIZE
+        gray: np.ndarray, shape: list, fallback_size: int = IMAGE_SIZE
 ) -> tuple[np.ndarray, tuple[int, int], str]:
     if len(shape) != 4:
         raise ValueError(f"Expected a 4D ONNX input, got: {shape}")
@@ -108,6 +150,71 @@ def overlay_prediction(base_rgb: np.ndarray, mask: np.ndarray, alpha: float) -> 
     result = base_rgb.copy()
     foreground = mask != 0
     result[foreground] = (
-        (1 - alpha) * result[foreground] + alpha * colors[foreground]
+            (1 - alpha) * result[foreground] + alpha * colors[foreground]
     ).astype(np.uint8)
     return result
+
+
+if __name__ == "__main__":
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from PIL import Image
+    from matplotlib.patches import Circle
+
+    image_path = r"D:\Code\2D-Image-Segmentation\data\oct_dataset\train\image\01_frame_000021.png"
+
+    gray = np.array(Image.open(image_path).convert("L"))
+    cleaned = clean_circular_roi(gray)
+
+    cx = cy = 512
+    # =========================
+    # 可视化
+    # =========================
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+    # 原图 + 圆环
+    axes[0].imshow(gray, cmap="gray")
+
+    axes[0].add_patch(
+        Circle(
+            (cx, cy),
+            INNER_RADIUS,
+            fill=False,
+            linewidth=1,
+            edgecolor="blue",
+        )
+    )
+
+    axes[0].add_patch(
+        Circle(
+            (cx, cy),
+            OUTER_RADIUS,
+            fill=False,
+            linewidth=1,
+            edgecolor="red",
+        )
+    )
+
+    axes[0].scatter(
+        cx,
+        cy,
+        s=50,
+        c="yellow",
+        marker="+",
+    )
+
+    axes[0].set_title(
+        f"Original\n"
+        f"Inner R={INNER_RADIUS}px, "
+        f"Outer R={OUTER_RADIUS}px"
+    )
+
+    axes[0].set_aspect("equal")
+
+    # 圆环 ROI 后的结果
+    axes[1].imshow(cleaned, cmap="gray")
+    axes[1].set_title("Circular Ring ROI")
+    axes[1].set_aspect("equal")
+
+    plt.tight_layout()
+    plt.show()

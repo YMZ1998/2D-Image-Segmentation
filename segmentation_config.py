@@ -1,7 +1,10 @@
 """Shared dataset, class and visualization configuration."""
 
 IMAGE_SIZE = 1024
-ROI_RADIUS_RATIO = 0.475
+INNER_RADIUS = 110
+OUTER_RADIUS = 486
+ROI_RADIUS_RATIO = OUTER_RADIUS / IMAGE_SIZE
+ROI_INNER_RADIUS_RATIO = INNER_RADIUS / IMAGE_SIZE
 
 CLASS_NAMES = ("background", "plaque", "Stent", "InvalidRegion")
 CLASS_LOSS_WEIGHTS = (1.0, 4.0, 8.0, 1.0)
