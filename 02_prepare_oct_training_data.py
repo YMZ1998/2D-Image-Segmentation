@@ -187,6 +187,9 @@ def main() -> None:
                 raise ValueError(
                     f"Image/annotation size mismatch: {image_path} {cleaned.size}, mask {mask.size}"
                 )
+            mask_array=np.asarray(mask)
+            mask_array=clean_circular_roi(mask_array)
+            mask = Image.fromarray(clean_circular_roi(mask_array))
             mask.save(mask_output)
             manifest["samples"].append({
                 "name": name,

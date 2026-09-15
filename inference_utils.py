@@ -5,8 +5,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 
-from segmentation_config import CLASS_COLORS, CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO, INNER_RADIUS, OUTER_RADIUS, \
-    ROI_INNER_RADIUS_RATIO
+from segmentation_config import (
+    CLASS_COLORS,
+    CLASS_NAMES,
+    IMAGE_SIZE,
+    ROI_RADIUS_RATIO,
+    ROI_INNER_RADIUS_RATIO, OUTER_RADIUS, INNER_RADIUS,
+)
 
 
 def newest_onnx(directory: Path = Path("save_weights")) -> Path:
@@ -16,58 +21,43 @@ def newest_onnx(directory: Path = Path("save_weights")) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-# def clean_circular_roi(gray: np.ndarray, radius_ratio: float = ROI_RADIUS_RATIO) -> np.ndarray:
-#     if gray.ndim != 2:
-#         raise ValueError(f"Expected a 2D grayscale image, got shape {gray.shape}")
-#     if not 0 < radius_ratio <= 0.5:
-#         raise ValueError("radius_ratio must be in (0, 0.5]")
-#     height, width = gray.shape
-#     yy, xx = np.ogrid[:height, :width]
-#     radius = min(height, width) * radius_ratio
-#     roi = (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
-#     cleaned = gray.copy()
-#     cleaned[~roi] = 0
-#     return cleaned
-def clean_circular_roi(
-        gray: np.ndarray,
-        radius_ratio: float = ROI_RADIUS_RATIO,
-        inner_radius_ratio: float = ROI_INNER_RADIUS_RATIO,
+def circular_roi_mask(
+    height: int,
+    width: int,
+    radius_ratio: float = ROI_RADIUS_RATIO,
+    inner_radius_ratio: float = ROI_INNER_RADIUS_RATIO,
 ) -> np.ndarray:
-    if gray.ndim != 2:
-        raise ValueError(f"Expected a 2D grayscale image, got shape {gray.shape}")
-
     if not 0 < radius_ratio <= 0.5:
         raise ValueError("radius_ratio must be in (0, 0.5]")
-
     if not 0 <= inner_radius_ratio < radius_ratio:
-        raise ValueError(
-            "inner_radius_ratio must be in [0, radius_ratio)"
-        )
+        raise ValueError("inner_radius_ratio must be in [0, radius_ratio)")
 
-    height, width = gray.shape
     yy, xx = np.ogrid[:height, :width]
-
     center_x = (width - 1) / 2
     center_y = (height - 1) / 2
-
-    # # 外圆半径
-    # outer_radius = min(height, width) * radius_ratio
-    #
-    # # 内圆半径
-    # inner_radius = min(height, width) * inner_radius_ratio
-
     distance_sq = (xx - center_x) ** 2 + (yy - center_y) ** 2
+    outer = min(height, width) * radius_ratio
+    inner = min(height, width) * inner_radius_ratio
+    return (distance_sq <= outer**2) & (distance_sq >= inner**2)
 
-    # 圆环区域：
-    # 内圆 <= 距离 <= 外圆
-    roi = (
-            (distance_sq <= OUTER_RADIUS ** 2)
-            & (distance_sq >= INNER_RADIUS ** 2)
+
+def clean_circular_roi(
+    array: np.ndarray,
+    radius_ratio: float = ROI_RADIUS_RATIO,
+    inner_radius_ratio: float = ROI_INNER_RADIUS_RATIO,
+    fill_value: int = 0,
+) -> np.ndarray:
+    if array.ndim != 2:
+        raise ValueError(f"Expected a 2D grayscale array, got shape {array.shape}")
+
+    roi = circular_roi_mask(
+        array.shape[0],
+        array.shape[1],
+        radius_ratio=radius_ratio,
+        inner_radius_ratio=inner_radius_ratio,
     )
-
-    cleaned = gray.copy()
-    cleaned[~roi] = 0
-
+    cleaned = array.copy()
+    cleaned[~roi] = fill_value
     return cleaned
 
 
