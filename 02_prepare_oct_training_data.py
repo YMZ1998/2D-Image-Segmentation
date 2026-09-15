@@ -57,11 +57,32 @@ def draw_mask(data: dict) -> Image.Image:
     mask = Image.new("L", size, 0)
     draw = ImageDraw.Draw(mask)
     for shape in data["shapes"]:
-        if shape.get("shape_type", "polygon") != "polygon":
-            raise ValueError(f"Unsupported shape type: {shape.get('shape_type')}")
-        points = [(round(x), round(y)) for x, y in shape["points"]]
         class_id = SOURCE_LABEL_TO_CLASS_ID[str(shape["label"])]
-        draw.polygon(points, fill=CLASS_ID_TO_MASK_VALUE[class_id])
+        fill = CLASS_ID_TO_MASK_VALUE[class_id]
+        shape_type = shape.get("shape_type", "polygon")
+        points = [(float(x), float(y)) for x, y in shape["points"]]
+
+        if shape_type == "polygon":
+            draw.polygon(
+                [(round(x), round(y)) for x, y in points],
+                fill=fill,
+            )
+        elif shape_type == "circle":
+            if len(points) != 2:
+                raise ValueError(
+                    f"Circle requires center and edge points, got {len(points)}"
+                )
+            (cx, cy), (px, py) = points
+            radius = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+            bbox = (
+                round(cx - radius),
+                round(cy - radius),
+                round(cx + radius),
+                round(cy + radius),
+            )
+            draw.ellipse(bbox, fill=fill)
+        else:
+            raise ValueError(f"Unsupported shape type: {shape_type}")
     return mask
 
 
@@ -125,7 +146,7 @@ def main() -> None:
                 )
             continue
         mask = draw_mask(data)
-        if REQUIRED_MASK_VALUE not in mask.getdata():
+        if not np.any(np.asarray(mask) == REQUIRED_MASK_VALUE):
             filtered["missing_class_3"] += 1
             print(
                 f"[跳过] mask 中没有类别 {REQUIRED_CLASS_ID} ({CLASS_NAMES[REQUIRED_CLASS_ID]})\n"

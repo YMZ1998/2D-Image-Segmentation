@@ -91,7 +91,10 @@ python apps/overlay_viewer.py
 python apps/mp4_viewer.py
 python scripts/inference/predict_single.py path/to/image.png --arch unet
 python scripts/inference/predict_single_onnx.py path/to/image.png
-python 04_convert_onnx.py --arch unet
+
+python train.py
+python create_data_dir.py
+python 04_convert_onnx.py
 ```
 
 ## Reference
