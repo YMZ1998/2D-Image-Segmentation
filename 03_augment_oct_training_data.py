@@ -33,7 +33,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("data/oct_dataset"))
     parser.add_argument("--output", type=Path, default=Path("data/oct_augmented_dataset"))
-    parser.add_argument("--count", type=int, default=5, help="Variants generated per training image")
+    parser.add_argument("--count", type=int, default=4, help="Variants generated per training image")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     source, output = args.input.resolve(), args.output.resolve()
