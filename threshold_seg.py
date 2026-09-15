@@ -1,138 +1,145 @@
+import glob
+import os
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
 
-image_path = r"D:\Code\2D-Image-Segmentation\data\oct_dataset\train\image\01_frame_000021.png"
 
-# =========================
-# 参数
-# =========================
+def detect_inner_circle(
+        image_path: str,
+        threshold: int = 1,
+        max_radius: int = 300,
+        visualize: bool = True,
+):
+    gray = cv2.imread(
+        image_path,
+        cv2.IMREAD_GRAYSCALE
+    )
 
-THRESHOLD = 1
+    if gray is None:
+        raise FileNotFoundError(image_path)
 
-# 核大小
-KERNEL_SIZE = 5
+    height, width = gray.shape
 
-# =========================
-# 参数
-# =========================
+    cx = (width - 1) / 2
+    cy = (height - 1) / 2
 
-gray = cv2.imread(
-    image_path,
-    cv2.IMREAD_GRAYSCALE
-)
+    # 黑色区域
+    black_region = (
+            gray < threshold
+    ).astype(np.uint8)
 
-if gray is None:
-    raise FileNotFoundError(image_path)
+    # 连通域
+    num_labels, labels, stats, centroids = (
+        cv2.connectedComponentsWithStats(
+            black_region,
+            connectivity=8
+        )
+    )
 
-height, width = gray.shape
+    # 中心像素所在的连通区域
+    center_x = int(round(cx))
+    center_y = int(round(cy))
 
-# 图像中心
-cx = (width - 1) / 2
-cy = (height - 1) / 2
+    center_label = labels[
+        center_y,
+        center_x
+    ]
 
-print(f"图像中心: ({cx:.1f}, {cy:.1f})")
+    if center_label == 0:
+        raise RuntimeError(
+            "图像中心不是黑色区域，请调整 threshold"
+        )
 
-# ============================================================
-# 从中心向外寻找内圆边界
-# ============================================================
+    # 中心黑色区域
+    inner_mask = (
+            labels == center_label
+    )
 
-yy, xx = np.indices(gray.shape)
+    # 获取坐标
+    ys, xs = np.where(inner_mask)
 
-distance = np.sqrt(
-    (xx - cx) ** 2 +
-    (yy - cy) ** 2
-)
+    distances = np.sqrt(
+        (xs - cx) ** 2 +
+        (ys - cy) ** 2
+    )
 
-# 中心黑色区域
-black_region = gray < THRESHOLD
+    # 只保留合理范围
+    distances = distances[
+        distances < max_radius
+        ]
 
-# 只看距离中心 50~300 像素
-search_region = (
-        (distance > 50) &
-        (distance < 300)
-)
+    if len(distances) == 0:
+        raise RuntimeError(
+            "没有找到有效的内圆区域"
+        )
 
-# 黑色区域
-mask = black_region & search_region
+    # 使用百分位数比 max 更稳定
+    inner_radius = np.percentile(
+        distances,
+        99.99
+    )
+    inner_radius = int(inner_radius)
+    # print(f"图像中心: ({cx:.1f}, {cy:.1f})")
+    # print(f"内圆半径: {inner_radius:.2f} px")
+    # print(f"内圆直径: {inner_radius * 2:.2f} px")
 
-# ============================================================
-# 找中心黑色区域的连通域
-# ============================================================
+    if visualize:
+        fig, ax = plt.subplots(
+            figsize=(8, 8)
+        )
 
-num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-    black_region.astype(np.uint8),
-    connectivity=8
-)
+        ax.imshow(
+            gray,
+            cmap="gray"
+        )
 
-# 找中心所在的连通区域
-center_x_int = int(round(cx))
-center_y_int = int(round(cy))
+        circle = plt.Circle(
+            (cx, cy),
+            inner_radius,
+            fill=False,
+            linewidth=1,
+            color="red"
+        )
 
-center_label = labels[
-    center_y_int,
-    center_x_int
-]
+        ax.add_patch(circle)
 
-if center_label == 0:
-    raise RuntimeError("没有找到中心黑色区域")
+        ax.plot(
+            cx,
+            cy,
+            "+",
+            markersize=12,
+            color="yellow"
+        )
 
-# 中心黑色区域
-inner_mask = labels == center_label
+        ax.set_title(
+            f"Inner Radius = "
+            f"{inner_radius:.2f}px"
+        )
 
-# ============================================================
-# 根据中心黑色区域计算半径
-# ============================================================
+        ax.set_aspect("equal")
 
-ys, xs = np.where(inner_mask)
+        plt.show()
 
-distances = np.sqrt(
-    (xs - cx) ** 2 +
-    (ys - cy) ** 2
-)
+    return inner_radius, (cx, cy)
 
-# 最大距离就是内圆半径的近似值
-inner_radius = distances.max()
 
-print(f"中心黑色区域面积: {len(xs)} px")
-print(f"内圆半径: {inner_radius:.2f} px")
-print(f"内圆直径: {inner_radius * 2:.2f} px")
+if __name__ == "__main__":
+    src_path = r"D:\Code\2D-Image-Segmentation\Extracted"
+    for p in os.listdir(src_path):
+        path = os.path.join(src_path, p)
+        paths = glob.glob(os.path.join(path, "*.png"))
+        image_path = os.path.join(path, paths[0])
 
-# ============================================================
-# 可视化
-# ============================================================
+        print(image_path)
 
-fig, ax = plt.subplots(figsize=(8, 8))
+        inner_radius, center = detect_inner_circle(
+            image_path,
+            threshold=1,
+            max_radius=300,
+            visualize=False
+        )
 
-ax.imshow(gray, cmap="gray")
-
-# 内圆
-circle = plt.Circle(
-    (cx, cy),
-    inner_radius,
-    fill=False,
-    linewidth=1,
-    color="red"
-)
-
-ax.add_patch(circle)
-
-# 圆心
-ax.plot(
-    cx,
-    cy,
-    marker="+",
-    markersize=12,
-    markeredgewidth=1,
-    color="yellow"
-)
-
-ax.set_title(
-    f"Detected Inner Circle\n"
-    f"Radius = {inner_radius:.2f} px"
-)
-
-ax.set_aspect("equal")
-
-plt.show()
+        print("最终内圆半径:", inner_radius)
+        # print("最终圆心:", center)

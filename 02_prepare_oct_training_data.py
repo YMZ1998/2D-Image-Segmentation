@@ -9,10 +9,11 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
-
 from scripts.data_tools.common import remove_and_create_dir
 from inference_utils import clean_circular_roi
-from segmentation_config import CLASS_ID_TO_MASK_VALUE
+from segmentation_config import CLASS_ID_TO_MASK_VALUE, ROI_RADIUS_RATIO, IMAGE_SIZE
+from threshold_seg import detect_inner_circle
+
 # LabelMe source label -> contiguous training class ID.
 SOURCE_LABEL_TO_CLASS_ID = {
     "1": 1,  # plaque
@@ -187,8 +188,14 @@ def main() -> None:
                 raise ValueError(
                     f"Image/annotation size mismatch: {image_path} {cleaned.size}, mask {mask.size}"
                 )
-            mask_array=np.asarray(mask)
-            mask_array=clean_circular_roi(mask_array)
+            inner_radius, center = detect_inner_circle(
+                image_path,
+                threshold=1,
+                max_radius=300,
+                visualize=False
+            )
+            mask_array = np.asarray(mask)
+            mask_array = clean_circular_roi(mask_array, ROI_RADIUS_RATIO, inner_radius / IMAGE_SIZE)
             mask = Image.fromarray(clean_circular_roi(mask_array))
             mask.save(mask_output)
             manifest["samples"].append({

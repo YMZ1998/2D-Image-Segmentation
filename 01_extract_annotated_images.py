@@ -5,6 +5,8 @@ import json
 import shutil
 from pathlib import Path
 
+from tqdm import tqdm
+
 from scripts.data_tools.common import remove_and_create_dir
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -12,7 +14,7 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 def collect_pairs(source: Path):
     pairs = []
-    for annotation in sorted(source.rglob("*.json")):
+    for annotation in tqdm(sorted(source.rglob("*.json"))):
         data = json.loads(annotation.read_text(encoding="utf-8-sig"))
         # Skip export manifests and other JSON documents. Empty shapes are valid
         # annotations for normal images with no target objects.
