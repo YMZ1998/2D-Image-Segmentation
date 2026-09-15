@@ -120,8 +120,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Extracted"))
     parser.add_argument("--output", type=Path, default=Path("data/oct_dataset"))
-    parser.add_argument("--test-ratio", type=float, default=0.2)
-    parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--test-ratio", type=float, default=0.3)
+    parser.add_argument("--seed", type=int, default=222)
     args = parser.parse_args()
     source = args.input.resolve()
     output = args.output.resolve()
@@ -146,6 +146,7 @@ def main() -> None:
                     f"       标注: {annotation}"
                 )
             continue
+        # print(annotation)
         mask = draw_mask(data)
         if not np.any(np.asarray(mask) == REQUIRED_MASK_VALUE):
             filtered["missing_class_3"] += 1
