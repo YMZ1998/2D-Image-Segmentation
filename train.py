@@ -68,7 +68,7 @@ def train():
         weights_path = get_best_weight_path(args)
         if not os.path.exists(weights_path):
             raise FileNotFoundError('not found weights file: {}'.format(weights_path))
-        checkpoint = torch.load(weights_path, map_location='cpu')
+        checkpoint = torch.load(weights_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])

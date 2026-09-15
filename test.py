@@ -28,7 +28,7 @@ def model_test():
     model = get_model(args)
     weights_path = get_best_weight_path(args)
     # print(weights_path)
-    model.load_state_dict(torch.load(weights_path, map_location='cpu')['model'])
+    model.load_state_dict(torch.load(weights_path, map_location='cpu', weights_only=False)['model'])
     start_time = time.time()
 
     confmat, val_dice, val_loss, val_miou, class_dice = evaluate(

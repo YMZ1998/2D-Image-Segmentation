@@ -93,6 +93,7 @@ python scripts/inference/predict_single.py path/to/image.png --arch unet
 python scripts/inference/predict_single_onnx.py path/to/image.png
 
 python train.py
+python train.py --resume 1  --epoch 500
 python create_data_dir.py
 python 04_convert_onnx.py
 ```
