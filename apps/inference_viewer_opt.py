@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from PyQt5.QtCore import QEvent, QPoint, QSettings, QSize, Qt
+from PyQt5.QtCore import QEvent, QPoint, QSettings, QSize, Qt, QTimer
 from PyQt5.QtGui import QFont, QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -47,6 +47,7 @@ from segmentation_config import (
 DEFAULT_IMAGE_DIR = Path(r"D:\data\OCT")
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 OVERLAY_CACHE_DIRNAME = "overlay"
+BATCH_INFERENCE_SIZE = 8
 
 # OCT 有效圆区域
 OCT_OUTER_RADIUS_RATIO = 0.49
@@ -97,7 +98,7 @@ class OverlayViewer(QMainWindow):
       - 中间：Original + Segmentation
       - 右侧：Classes / Quantification / Image Info
       - CPUExecutionProvider only
-      - 无序列浏览、无自动播放、无导出
+      - 支持目录顺序浏览和自动播放预测
     """
 
     def __init__(self) -> None:
@@ -137,6 +138,10 @@ class OverlayViewer(QMainWindow):
         self._indexed_directory: Path | None = None
         self._directory_images: list[Path] = []
         self._directory_index = -1
+        self._progress_dragging = False
+        self.play_timer = QTimer(self)
+        self.play_timer.timeout.connect(self.play_next_prediction)
+        self.is_playing = False
         self.source_image: Image.Image | None = None
         self.prediction_mask: Image.Image | None = None
         self.prediction_rendered: Image.Image | None = None
@@ -160,6 +165,7 @@ class OverlayViewer(QMainWindow):
         self.inference_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.inference_shortcut.activated.connect(self.run_onnx_prediction)
         QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=self.run_all_predictions)
+        QShortcut(QKeySequence("Ctrl+Shift+Space"), self, activated=self.toggle_auto_play)
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_onnx_model)
         QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self.change_image(-1))
         QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self.change_image(1))
@@ -265,6 +271,36 @@ class OverlayViewer(QMainWindow):
         predict_all_btn.clicked.connect(self.run_all_predictions)
         layout.addWidget(predict_all_btn)
         self.predict_all_button = predict_all_btn
+
+        play_row = QHBoxLayout()
+        play_row.setSpacing(6)
+        self.auto_play_button = QPushButton("自动播放")
+        self.auto_play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.auto_play_button.setIconSize(QSize(14, 14))
+        self.auto_play_button.clicked.connect(self.toggle_auto_play)
+        play_row.addWidget(self.auto_play_button, 1)
+
+        self.play_interval_box = QComboBox()
+        self.play_interval_box.addItems(("0.5 秒", "1 秒", "2 秒", "3 秒", "5 秒"))
+        self.play_interval_box.setCurrentText("1 秒")
+        self.play_interval_box.setFixedWidth(78)
+        self.play_interval_box.setToolTip("自动播放间隔")
+        self.play_interval_box.currentTextChanged.connect(self.update_play_interval)
+        play_row.addWidget(self.play_interval_box)
+        layout.addLayout(play_row)
+
+        self.file_progress_label = QLabel("文件进度：—/—")
+        self.file_progress_label.setObjectName("mutedLabel")
+        layout.addWidget(self.file_progress_label)
+
+        self.file_progress_slider = QSlider(Qt.Horizontal)
+        self.file_progress_slider.setObjectName("fileProgressSlider")
+        self.file_progress_slider.setRange(0, 0)
+        self.file_progress_slider.setToolTip("拖动选择目录中的图像")
+        self.file_progress_slider.valueChanged.connect(self._on_progress_value_changed)
+        self.file_progress_slider.sliderPressed.connect(self._on_progress_pressed)
+        self.file_progress_slider.sliderReleased.connect(self._on_progress_released)
+        layout.addWidget(self.file_progress_slider)
 
         layout.addWidget(self._divider())
 
@@ -756,6 +792,11 @@ class OverlayViewer(QMainWindow):
         try:
             self.image_path = path
             self.image_dir = path.parent
+            self._ensure_directory_index()
+            try:
+                self._directory_index = self._directory_images.index(path.resolve())
+            except ValueError:
+                self._directory_index = -1
             self.settings.setValue("image_dir", str(self.image_dir))
             self.settings.setValue("last_image", str(path))
             self.remembered_image_path = path
@@ -809,6 +850,104 @@ class OverlayViewer(QMainWindow):
 
         self._directory_index = (current + step) % len(self._directory_images)
         self.load_image(self._directory_images[self._directory_index])
+
+    def _on_progress_pressed(self) -> None:
+        self._progress_dragging = True
+
+    def _on_progress_value_changed(self, value: int) -> None:
+        if not self._progress_dragging or not self._directory_images:
+            return
+        self.file_progress_label.setText(
+            f"文件进度：{min(value + 1, len(self._directory_images))}/{len(self._directory_images)}"
+        )
+
+    def _on_progress_released(self) -> None:
+        self._progress_dragging = False
+        if not self._directory_images:
+            return
+
+        index = self.file_progress_slider.value()
+        if not 0 <= index < len(self._directory_images):
+            return
+
+        self.load_image(self._directory_images[index])
+        if self.is_playing and self.prediction_mask is None:
+            self.run_onnx_prediction()
+
+    def update_play_interval(self, _text: str = "") -> None:
+        if self.is_playing:
+            self.play_timer.setInterval(self.current_play_interval_ms())
+
+    def current_play_interval_ms(self) -> int:
+        text = self.play_interval_box.currentText().split()[0]
+        return max(100, round(float(text) * 1000))
+
+    def toggle_auto_play(self) -> None:
+        if self.is_playing:
+            self.stop_auto_play()
+            return
+
+        if self.image_path is None:
+            QMessageBox.information(self, "提示", "请先选择 OCT 图像")
+            return
+
+        self._ensure_directory_index()
+        if len(self._directory_images) < 2:
+            QMessageBox.information(self, "提示", "当前目录至少需要两张图像")
+            return
+
+        self.is_playing = True
+        self.play_timer.start(self.current_play_interval_ms())
+        self.auto_play_button.setText("停止播放")
+        self.auto_play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        self.status_ready.setText("Playing")
+        self.play_next_prediction()
+
+    def stop_auto_play(self) -> None:
+        self.play_timer.stop()
+        self.is_playing = False
+        self.auto_play_button.setText("自动播放")
+        self.auto_play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.status_ready.setText("Ready")
+        self._update_status_bar()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt API name)
+        self.stop_auto_play()
+        event.accept()
+
+    def _ensure_directory_index(self) -> None:
+        if self.image_path is None:
+            return
+
+        directory = self.image_path.parent.resolve()
+        if directory != self._indexed_directory:
+            self._directory_images = [
+                path.resolve()
+                for path in sorted(directory.iterdir())
+                if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+            ]
+            self._indexed_directory = directory
+
+    def play_next_prediction(self) -> None:
+        if not self.is_playing or self.image_path is None:
+            return
+
+        self._ensure_directory_index()
+        if len(self._directory_images) < 2:
+            self.stop_auto_play()
+            return
+
+        try:
+            current = self._directory_images.index(self.image_path.resolve())
+        except ValueError:
+            self._directory_index = -1
+            self.stop_auto_play()
+            return
+
+        next_index = (current + 1) % len(self._directory_images)
+        self.load_image(self._directory_images[next_index])
+        if self.prediction_mask is None:
+            self.run_onnx_prediction()
 
     def choose_onnx_model(self) -> None:
         start = (
@@ -1237,6 +1376,96 @@ class OverlayViewer(QMainWindow):
 
         return Image.fromarray(prediction.astype(np.uint8), mode="L"), elapsed_ms
 
+    def predict_masks_for_images(
+        self,
+        images: list[Image.Image],
+    ) -> tuple[list[Image.Image], float]:
+        """Run one ONNX call for a batch of images when the model allows it."""
+        if self.onnx_session is None:
+            raise RuntimeError("ONNX session 尚未初始化")
+        if not images:
+            return [], 0.0
+
+        input_meta = self.onnx_session.get_inputs()[0]
+        shape = input_meta.shape
+        if len(shape) != 4:
+            raise ValueError(f"Expected a 4D ONNX input, got: {shape}")
+
+        if shape[1] in (1, 3):
+            layout, channels = "NCHW", int(shape[1])
+            height = int(shape[2]) if isinstance(shape[2], int) else IMAGE_SIZE
+            width = int(shape[3]) if isinstance(shape[3], int) else IMAGE_SIZE
+        elif shape[3] in (1, 3):
+            layout, channels = "NHWC", int(shape[3])
+            height = int(shape[1]) if isinstance(shape[1], int) else IMAGE_SIZE
+            width = int(shape[2]) if isinstance(shape[2], int) else IMAGE_SIZE
+        else:
+            raise ValueError(f"Cannot determine channel/layout from ONNX input shape: {shape}")
+
+        tensors = []
+        for image in images:
+            gray = np.asarray(image.convert("L"))
+            gray = self.mask_oct_region(gray)
+            resized = np.asarray(
+                Image.fromarray(gray).resize(
+                    (width, height),
+                    Image.Resampling.LANCZOS,
+                ),
+                dtype=np.float32,
+            )
+            resized = resized / 127.5 - 1.0
+            resized = np.repeat(resized[..., None], channels, axis=2)
+            tensors.append(
+                resized.transpose(2, 0, 1) if layout == "NCHW" else resized
+            )
+
+        tensor = np.ascontiguousarray(np.stack(tensors, axis=0), dtype=np.float32)
+        expected_batch = (
+            int(shape[0])
+            if isinstance(shape[0], int) and shape[0] > 0
+            else len(images)
+        )
+        if expected_batch > len(images):
+            padding = np.zeros(
+                (expected_batch - len(images), *tensor.shape[1:]),
+                dtype=tensor.dtype,
+            )
+            tensor = np.concatenate((tensor, padding), axis=0)
+
+        start = time.perf_counter()
+        output = self.onnx_session.run(
+            None,
+            {input_meta.name: tensor},
+        )[0]
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+        output = np.asarray(output)
+        if output.ndim == 4:
+            valid_class_counts = range(2, len(CLASS_NAMES) + 1)
+            if output.shape[1] in valid_class_counts:
+                predictions = output.argmax(axis=1)
+            elif output.shape[-1] in valid_class_counts:
+                predictions = output.argmax(axis=-1)
+            else:
+                raise ValueError(f"Cannot find the class axis in ONNX output shape: {output.shape}")
+        elif output.ndim == 3:
+            predictions = output
+        else:
+            raise ValueError(f"Unsupported batched ONNX output shape: {output.shape}")
+
+        masks = []
+        for prediction, image in zip(predictions[:len(images)], images):
+            prediction = np.asarray(
+                Image.fromarray(prediction.astype(np.uint8)).resize(
+                    image.size,
+                    Image.Resampling.NEAREST,
+                )
+            )
+            prediction = self.mask_prediction_region(prediction)
+            masks.append(Image.fromarray(prediction.astype(np.uint8), mode="L"))
+
+        return masks, elapsed_ms
+
     def run_onnx_prediction(self) -> bool:
         if self.source_image is None or self.image_path is None:
             QMessageBox.information(self, "提示", "请先选择 OCT 图像")
@@ -1310,27 +1539,43 @@ class OverlayViewer(QMainWindow):
 
         try:
             model_path, session = self.ensure_onnx_session()
+            input_shape = session.get_inputs()[0].shape
+            fixed_batch = input_shape[0] if input_shape else None
+            batch_size = (
+                int(fixed_batch)
+                if isinstance(fixed_batch, int) and fixed_batch > 0
+                else BATCH_INFERENCE_SIZE
+            )
+            batch_size = min(batch_size, BATCH_INFERENCE_SIZE)
 
-            for index, path in enumerate(image_paths, start=1):
-                self.status_ready.setText(f"Batch {index}/{len(image_paths)}")
+            for batch_start in range(0, len(image_paths), batch_size):
+                batch_paths = image_paths[batch_start:batch_start + batch_size]
+                self.status_ready.setText(
+                    f"Batch {batch_start + 1}-{batch_start + len(batch_paths)}/{len(image_paths)}"
+                )
                 QApplication.processEvents()
 
                 try:
-                    with Image.open(path) as image:
-                        source = image.convert("RGBA")
-                    mask, elapsed_ms = self.predict_mask_for_image(source)
-                    self.save_cached_prediction(path, mask, model_path)
-                    completed += 1
-                    total_ms += elapsed_ms
+                    sources = []
+                    for path in batch_paths:
+                        with Image.open(path) as image:
+                            sources.append(image.convert("RGBA"))
+                    masks, elapsed_ms = self.predict_masks_for_images(sources)
+                    per_image_ms = elapsed_ms / len(batch_paths)
 
-                    if self.image_path is not None and path == self.image_path.resolve():
-                        self.prediction_mask = mask
-                        self.last_inference_ms = elapsed_ms
-                        self.render_prediction()
-                        self.update_prediction_stats(np.asarray(mask))
-                        self.inference_value.setText(f"{elapsed_ms:.1f} ms")
+                    for path, mask in zip(batch_paths, masks):
+                        self.save_cached_prediction(path, mask, model_path)
+                        completed += 1
+                        total_ms += per_image_ms
+
+                        if self.image_path is not None and path == self.image_path.resolve():
+                            self.prediction_mask = mask
+                            self.last_inference_ms = per_image_ms
+                            self.render_prediction()
+                            self.update_prediction_stats(np.asarray(mask))
+                            self.inference_value.setText(f"{per_image_ms:.1f} ms")
                 except Exception as error:
-                    failed.append(f"{path.name}: {error}")
+                    failed.extend(f"{path.name}: {error}" for path in batch_paths)
 
             provider = session.get_providers()[0]
             self.provider_label.setText(provider)
@@ -1485,6 +1730,8 @@ class OverlayViewer(QMainWindow):
         if not hasattr(self, "status_model"):
             return
 
+        self._update_file_progress()
+
         model_name = (
             self.selected_model_path.name
             if self.selected_model_path
@@ -1514,6 +1761,32 @@ class OverlayViewer(QMainWindow):
         self.status_image.setText(f"Image: {image_name}")
         self.status_size.setText(f"Size: {image_size}")
         self.status_inference.setText(f"Inference: {inference}")
+
+    def _update_file_progress(self) -> None:
+        if not hasattr(self, "file_progress_slider"):
+            return
+
+        self._ensure_directory_index()
+        count = len(self._directory_images)
+        if count == 0 or self.image_path is None:
+            self.file_progress_slider.blockSignals(True)
+            self.file_progress_slider.setRange(0, 0)
+            self.file_progress_slider.setValue(0)
+            self.file_progress_slider.blockSignals(False)
+            self.file_progress_label.setText("文件进度：—/—")
+            return
+
+        try:
+            index = self._directory_images.index(self.image_path.resolve())
+        except ValueError:
+            index = 0
+
+        self._directory_index = index
+        self.file_progress_slider.blockSignals(True)
+        self.file_progress_slider.setRange(0, count - 1)
+        self.file_progress_slider.setValue(index)
+        self.file_progress_slider.blockSignals(False)
+        self.file_progress_label.setText(f"文件进度：{index + 1}/{count}")
 
     @staticmethod
     def class_display_values(class_id: int) -> frozenset[int]:
