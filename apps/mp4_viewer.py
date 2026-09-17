@@ -285,7 +285,7 @@ class Mp4Viewer(QMainWindow):
     def predict_current_frame(self) -> None:
         import onnxruntime as ort
 
-        model_path = newest_onnx()
+        model_path = newest_onnx(Path("../save_weights"))
         if self.onnx_session is None or model_path != self.onnx_model_path:
             providers = ["CPUExecutionProvider"]
             if "CUDAExecutionProvider" in ort.get_available_providers():
