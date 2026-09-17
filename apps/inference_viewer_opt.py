@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -104,7 +105,7 @@ class OverlayViewer(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("OCT ONNX Inference Viewer")
+        self.setWindowTitle("OCT Inference Viewer")
         self.resize(1600, 920)
         self.setMinimumSize(1280, 760)
         self.setAcceptDrops(True)
@@ -130,6 +131,8 @@ class OverlayViewer(QMainWindow):
 
         saved_model = Path(self.settings.value("onnx_model", ""))
         self.selected_model_path = saved_model if saved_model.is_file() else None
+        saved_engine = Path(self.settings.value("trt_engine", ""))
+        self.selected_engine_path = saved_engine if saved_engine.is_file() else None
 
         saved_image = Path(self.settings.value("last_image", ""))
         self.remembered_image_path = saved_image if saved_image.is_file() else None
@@ -150,6 +153,12 @@ class OverlayViewer(QMainWindow):
 
         self.onnx_session = None
         self.onnx_model_path: Path | None = None
+        self.trt_engine = None
+        self.trt_context = None
+        self.trt_cuda = None
+        self.trt_input_name: str | None = None
+        self.trt_output_name: str | None = None
+        self.trt_engine_path: Path | None = None
 
         self.zoom_factor = 1.0
         self.pan_offset = QPoint()
@@ -166,7 +175,7 @@ class OverlayViewer(QMainWindow):
         self.inference_shortcut.activated.connect(self.run_onnx_prediction)
         QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=self.run_all_predictions)
         QShortcut(QKeySequence("Ctrl+Shift+Space"), self, activated=self.toggle_auto_play)
-        QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_onnx_model)
+        QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_model_file)
         QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self.change_image(-1))
         QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self.change_image(1))
 
@@ -224,7 +233,7 @@ class OverlayViewer(QMainWindow):
         brand = QVBoxLayout()
         brand.setSpacing(0)
 
-        title = QLabel("OCT ONNX Inference Viewer")
+        title = QLabel("OCT Inference Viewer")
         title.setObjectName("appTitle")
 
         subtitle = QLabel("AI-Powered Intravascular OCT Analysis")
@@ -280,13 +289,18 @@ class OverlayViewer(QMainWindow):
         self.auto_play_button.clicked.connect(self.toggle_auto_play)
         play_row.addWidget(self.auto_play_button, 1)
 
-        self.play_interval_box = QComboBox()
-        self.play_interval_box.addItems(("0.5 秒", "1 秒", "2 秒", "3 秒", "5 秒"))
-        self.play_interval_box.setCurrentText("1 秒")
-        self.play_interval_box.setFixedWidth(78)
-        self.play_interval_box.setToolTip("自动播放间隔")
-        self.play_interval_box.currentTextChanged.connect(self.update_play_interval)
-        play_row.addWidget(self.play_interval_box)
+        self.play_interval_spin = QDoubleSpinBox()
+        self.play_interval_spin.setRange(0.1, 60.0)
+        self.play_interval_spin.setSingleStep(0.1)
+        self.play_interval_spin.setDecimals(1)
+        self.play_interval_spin.setSuffix(" 秒")
+        self.play_interval_spin.setValue(
+            self.settings.value("play_interval_seconds", 1.0, type=float)
+        )
+        self.play_interval_spin.setFixedWidth(86)
+        self.play_interval_spin.setToolTip("自动播放间隔")
+        self.play_interval_spin.valueChanged.connect(self.update_play_interval)
+        play_row.addWidget(self.play_interval_spin)
         layout.addLayout(play_row)
 
         self.file_progress_label = QLabel("文件进度：—/—")
@@ -307,23 +321,33 @@ class OverlayViewer(QMainWindow):
         # ---- Model ----
         layout.addWidget(self._section_title("模型设置", "Model Settings"))
 
-        model_caption = QLabel("ONNX 模型")
+        backend_row = QHBoxLayout()
+        backend_row.setSpacing(8)
+        backend_row.addWidget(QLabel("后端"))
+        self.backend_box = QComboBox()
+        self.backend_box.addItems(("ONNX", "TensorRT"))
+        self.backend_box.setCurrentText(
+            self.settings.value("inference_backend", "ONNX")
+        )
+        self.backend_box.currentTextChanged.connect(self.change_inference_backend)
+        backend_row.addWidget(self.backend_box, 1)
+        layout.addLayout(backend_row)
+
+        model_caption = QLabel("模型文件")
         model_caption.setObjectName("captionLabel")
         layout.addWidget(model_caption)
 
         self.model_info_label = QLabel(
-            str(self.selected_model_path)
-            if self.selected_model_path
-            else "自动加载 save_weights 中最新 ONNX 模型"
+            self.current_model_label_text()
         )
         self.model_info_label.setObjectName("pathLabel")
         self.model_info_label.setWordWrap(True)
         self.model_info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.model_info_label)
 
-        model_button = QPushButton("选择 ONNX 模型…")
-        model_button.clicked.connect(self.choose_onnx_model)
-        layout.addWidget(model_button)
+        self.model_button = QPushButton("选择模型…")
+        self.model_button.clicked.connect(self.choose_model_file)
+        layout.addWidget(self.model_button)
 
         device_row = QHBoxLayout()
         device_row.setSpacing(8)
@@ -338,7 +362,7 @@ class OverlayViewer(QMainWindow):
         provider_row.setSpacing(8)
         provider_row.addWidget(QLabel("Provider"))
         provider_row.addStretch(1)
-        self.provider_label = QLabel("CPUExecutionProvider")
+        self.provider_label = QLabel(self.current_provider_text())
         self.provider_label.setObjectName("mutedLabel")
         provider_row.addWidget(self.provider_label)
         layout.addLayout(provider_row)
@@ -418,6 +442,7 @@ class OverlayViewer(QMainWindow):
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(420, 420)
         self.image_label.setMouseTracking(True)
+        self.image_label.setUpdatesEnabled(True)
         layout.addWidget(self.image_label, 1)
         # 注意:installEventFilter 必须在 addWidget 之后调用,
         # 否则 Qt 5.15 在将带事件过滤器的控件加入布局时会触发原生栈溢出崩溃 (0xc0000409 / BEX64)。
@@ -492,6 +517,7 @@ class OverlayViewer(QMainWindow):
         self.prediction_label.setAlignment(Qt.AlignCenter)
         self.prediction_label.setMinimumSize(420, 420)
         self.prediction_label.setMouseTracking(True)
+        self.prediction_label.setUpdatesEnabled(True)
         layout.addWidget(self.prediction_label, 1)
         # 注意:installEventFilter 必须在 addWidget 之后调用(同 image_label 的修复原因)。
         self.prediction_label.installEventFilter(self)
@@ -803,11 +829,13 @@ class OverlayViewer(QMainWindow):
 
             self.source_image = Image.open(path).convert("RGBA")
 
-            self.clear_prediction()
-            self.load_cached_prediction(path)
+            cached = self.load_cached_prediction(path)
+            if not cached and not self.is_playing:
+                self.clear_prediction()
             self.zoom_factor = 1.0
             self.pan_offset = QPoint()
-            self.last_inference_ms = None
+            if not cached:
+                self.last_inference_ms = None
 
             self.image_path_label.setText(str(path))
             self.resolution_value.setText(
@@ -874,13 +902,16 @@ class OverlayViewer(QMainWindow):
         if self.is_playing and self.prediction_mask is None:
             self.run_onnx_prediction()
 
-    def update_play_interval(self, _text: str = "") -> None:
+    def update_play_interval(self, value: float = 0.0) -> None:
+        self.settings.setValue(
+            "play_interval_seconds",
+            self.play_interval_spin.value(),
+        )
         if self.is_playing:
             self.play_timer.setInterval(self.current_play_interval_ms())
 
     def current_play_interval_ms(self) -> int:
-        text = self.play_interval_box.currentText().split()[0]
-        return max(100, round(float(text) * 1000))
+        return max(100, round(self.play_interval_spin.value() * 1000))
 
     def toggle_auto_play(self) -> None:
         if self.is_playing:
@@ -949,6 +980,55 @@ class OverlayViewer(QMainWindow):
         if self.prediction_mask is None:
             self.run_onnx_prediction()
 
+    def current_backend(self) -> str:
+        if hasattr(self, "backend_box"):
+            return self.backend_box.currentText()
+        return self.settings.value("inference_backend", "ONNX")
+
+    def use_tensorrt(self) -> bool:
+        return self.current_backend() == "TensorRT"
+
+    def current_provider_text(self) -> str:
+        return "TensorRT" if self.use_tensorrt() else "CPUExecutionProvider"
+
+    def current_model_label_text(self) -> str:
+        if self.use_tensorrt():
+            return (
+                str(self.selected_engine_path)
+                if self.selected_engine_path
+                else "自动加载 save_weights 中最新 TensorRT engine"
+            )
+        return (
+            str(self.selected_model_path)
+            if self.selected_model_path
+            else "自动加载 save_weights 中最新 ONNX 模型"
+        )
+
+    def reset_inference_sessions(self) -> None:
+        self.onnx_session = None
+        self.onnx_model_path = None
+        self.trt_engine = None
+        self.trt_context = None
+        self.trt_cuda = None
+        self.trt_input_name = None
+        self.trt_output_name = None
+        self.trt_engine_path = None
+
+    def change_inference_backend(self, backend: str) -> None:
+        self.settings.setValue("inference_backend", backend)
+        self.reset_inference_sessions()
+        self.clear_prediction()
+        self.model_info_label.setText(self.current_model_label_text())
+        self.provider_label.setText(self.current_provider_text())
+        self.model_button.setText("选择 TensorRT Engine…" if self.use_tensorrt() else "选择 ONNX 模型…")
+        self._update_status_bar()
+
+    def choose_model_file(self) -> None:
+        if self.use_tensorrt():
+            self.choose_tensorrt_engine()
+        else:
+            self.choose_onnx_model()
+
     def choose_onnx_model(self) -> None:
         start = (
             self.selected_model_path.parent
@@ -971,16 +1051,46 @@ class OverlayViewer(QMainWindow):
         self.model_info_label.setText(str(self.selected_model_path))
         self.model_value.setText(self.selected_model_path.name)
 
-        self.onnx_session = None
-        self.onnx_model_path = None
+        self.reset_inference_sessions()
         self.clear_prediction()
 
+        self._update_status_bar()
+
+    def choose_tensorrt_engine(self) -> None:
+        start = (
+            self.selected_engine_path.parent
+            if self.selected_engine_path
+            else PROJECT_ROOT / "save_weights"
+        )
+
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 TensorRT Engine",
+            str(start),
+            "TensorRT Engine (*.engine *.plan *.trt)",
+        )
+        if not selected:
+            return
+
+        self.selected_engine_path = Path(selected).resolve()
+        self.settings.setValue("trt_engine", str(self.selected_engine_path))
+        self.model_info_label.setText(str(self.selected_engine_path))
+        self.model_value.setText(self.selected_engine_path.name)
+        self.reset_inference_sessions()
+        self.clear_prediction()
         self._update_status_bar()
 
     def resolve_onnx_model(self) -> Path:
         if self.selected_model_path and self.selected_model_path.is_file():
             return self.selected_model_path
         return newest_onnx(PROJECT_ROOT / "save_weights")
+
+    def resolve_tensorrt_engine(self) -> Path:
+        if self.selected_engine_path and self.selected_engine_path.is_file():
+            return self.selected_engine_path
+        from scripts.inference.predict_single_tensorrt import newest_engine
+
+        return newest_engine(PROJECT_ROOT / "save_weights")
 
     # ==================================================================
     # Drag/drop
@@ -1168,11 +1278,16 @@ class OverlayViewer(QMainWindow):
                 Qt.SmoothTransformation,
             )
 
-        label.setPixmap(fit_pixmap)
-        if isinstance(label, PannableImageLabel):
-            effective_offset = label.set_pan_offset(self.pan_offset)
-            if source:
-                self.pan_offset = effective_offset
+        label.setUpdatesEnabled(False)
+        try:
+            label.setPixmap(fit_pixmap)
+            if isinstance(label, PannableImageLabel):
+                effective_offset = label.set_pan_offset(self.pan_offset)
+                if source:
+                    self.pan_offset = effective_offset
+        finally:
+            label.setUpdatesEnabled(True)
+            label.update()
 
     def change_zoom(self, delta: float) -> None:
         self.zoom_factor = min(
@@ -1242,7 +1357,16 @@ class OverlayViewer(QMainWindow):
         image_path: Path,
         model_path: Path | None = None,
     ) -> Path:
-        model_key = model_path or self.selected_model_path or self.onnx_model_path
+        model_key = (
+            model_path
+            or (
+                self.selected_engine_path
+                if self.use_tensorrt()
+                else self.selected_model_path
+            )
+            or self.trt_engine_path
+            or self.onnx_model_path
+        )
         model_text = str(model_key.resolve()) if model_key else "auto"
         cache_key = f"{image_path.resolve()}|{model_text}"
         digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
@@ -1344,7 +1468,52 @@ class OverlayViewer(QMainWindow):
 
         return model_path, self.onnx_session
 
+    def ensure_tensorrt_session(self):
+        from scripts.inference.predict_single_tensorrt import (
+            binding_names,
+            build_engine_from_onnx,
+            import_trt_runtime,
+            is_input,
+            load_engine,
+            matching_onnx_for_engine,
+        )
+
+        engine_path = self.resolve_tensorrt_engine()
+        if self.trt_engine is None or engine_path != self.trt_engine_path:
+            trt, cuda = import_trt_runtime()
+            try:
+                engine = load_engine(engine_path, trt)
+            except RuntimeError:
+                engine = build_engine_from_onnx(
+                    onnx_path=matching_onnx_for_engine(engine_path),
+                    engine_path=engine_path,
+                    trt=trt,
+                    fp16=False,
+                    workspace_gb=2.0,
+                )
+
+            context = engine.create_execution_context()
+            names = binding_names(engine)
+            input_names = [name for name in names if is_input(engine, name)]
+            output_names = [name for name in names if not is_input(engine, name)]
+            if len(input_names) != 1 or len(output_names) < 1:
+                raise RuntimeError(
+                    f"Expected one TensorRT input and at least one output, got {input_names}, {output_names}"
+                )
+
+            self.trt_engine = engine
+            self.trt_context = context
+            self.trt_cuda = cuda
+            self.trt_input_name = input_names[0]
+            self.trt_output_name = output_names[0]
+            self.trt_engine_path = engine_path
+
+        return engine_path
+
     def predict_mask_for_image(self, image: Image.Image) -> tuple[Image.Image, float]:
+        if self.use_tensorrt():
+            return self.predict_mask_for_image_tensorrt(image)
+
         if self.onnx_session is None:
             raise RuntimeError("ONNX session 尚未初始化")
 
@@ -1374,6 +1543,49 @@ class OverlayViewer(QMainWindow):
         )
         prediction = self.mask_prediction_region(prediction)
 
+        return Image.fromarray(prediction.astype(np.uint8), mode="L"), elapsed_ms
+
+    def predict_mask_for_image_tensorrt(self, image: Image.Image) -> tuple[Image.Image, float]:
+        from scripts.inference.predict_single_tensorrt import (
+            execute,
+            output_to_mask,
+            prepare_input,
+            tensor_shape,
+        )
+
+        if (
+            self.trt_engine is None
+            or self.trt_context is None
+            or self.trt_cuda is None
+            or self.trt_input_name is None
+            or self.trt_output_name is None
+        ):
+            raise RuntimeError("TensorRT engine 尚未初始化")
+
+        gray = np.asarray(image.convert("L"))
+        gray = self.mask_oct_region(gray)
+        input_shape = tuple(
+            dim if isinstance(dim, int) and dim > 0 else IMAGE_SIZE
+            for dim in tensor_shape(self.trt_engine, self.trt_context, self.trt_input_name)
+        )
+        tensor, _, _ = prepare_input(gray, input_shape, IMAGE_SIZE)
+        output, elapsed_ms = execute(
+            self.trt_engine,
+            self.trt_context,
+            self.trt_cuda,
+            self.trt_input_name,
+            self.trt_output_name,
+            tensor,
+        )
+
+        prediction = output_to_mask(output)
+        prediction = np.asarray(
+            Image.fromarray(prediction).resize(
+                image.size,
+                Image.Resampling.NEAREST,
+            )
+        )
+        prediction = self.mask_prediction_region(prediction)
         return Image.fromarray(prediction.astype(np.uint8), mode="L"), elapsed_ms
 
     def predict_masks_for_images(
@@ -1479,7 +1691,13 @@ class OverlayViewer(QMainWindow):
         QApplication.processEvents()
 
         try:
-            model_path, session = self.ensure_onnx_session()
+            if self.use_tensorrt():
+                model_path = self.ensure_tensorrt_session()
+                session = None
+                provider = "TensorRT"
+            else:
+                model_path, session = self.ensure_onnx_session()
+                provider = session.get_providers()[0]
             mask, elapsed_ms = self.predict_mask_for_image(self.source_image)
 
             self.prediction_mask = mask
@@ -1488,11 +1706,10 @@ class OverlayViewer(QMainWindow):
             self.render_prediction()
             self.update_prediction_stats(np.asarray(mask))
 
-            provider = session.get_providers()[0]
             self.provider_label.setText(provider)
             self.model_info_label.setText(str(model_path))
             self.model_value.setText(model_path.name)
-            self.device_value.setText("CPU")
+            self.device_value.setText("GPU" if self.use_tensorrt() else "CPU")
             self.inference_value.setText(f"{elapsed_ms:.1f} ms")
 
             self.status_ready.setText("Ready")
@@ -1538,15 +1755,21 @@ class OverlayViewer(QMainWindow):
         total_ms = 0.0
 
         try:
-            model_path, session = self.ensure_onnx_session()
-            input_shape = session.get_inputs()[0].shape
-            fixed_batch = input_shape[0] if input_shape else None
-            batch_size = (
-                int(fixed_batch)
-                if isinstance(fixed_batch, int) and fixed_batch > 0
-                else BATCH_INFERENCE_SIZE
-            )
-            batch_size = min(batch_size, BATCH_INFERENCE_SIZE)
+            if self.use_tensorrt():
+                model_path = self.ensure_tensorrt_session()
+                provider = "TensorRT"
+                batch_size = 1
+            else:
+                model_path, session = self.ensure_onnx_session()
+                provider = session.get_providers()[0]
+                input_shape = session.get_inputs()[0].shape
+                fixed_batch = input_shape[0] if input_shape else None
+                batch_size = (
+                    int(fixed_batch)
+                    if isinstance(fixed_batch, int) and fixed_batch > 0
+                    else BATCH_INFERENCE_SIZE
+                )
+                batch_size = min(batch_size, BATCH_INFERENCE_SIZE)
 
             for batch_start in range(0, len(image_paths), batch_size):
                 batch_paths = image_paths[batch_start:batch_start + batch_size]
@@ -1560,7 +1783,16 @@ class OverlayViewer(QMainWindow):
                     for path in batch_paths:
                         with Image.open(path) as image:
                             sources.append(image.convert("RGBA"))
-                    masks, elapsed_ms = self.predict_masks_for_images(sources)
+                    if self.use_tensorrt():
+                        start = time.perf_counter()
+                        masks = []
+                        elapsed_ms = 0.0
+                        for source in sources:
+                            mask, single_ms = self.predict_mask_for_image(source)
+                            masks.append(mask)
+                            elapsed_ms += single_ms
+                    else:
+                        masks, elapsed_ms = self.predict_masks_for_images(sources)
                     per_image_ms = elapsed_ms / len(batch_paths)
 
                     for path, mask in zip(batch_paths, masks):
@@ -1577,11 +1809,10 @@ class OverlayViewer(QMainWindow):
                 except Exception as error:
                     failed.extend(f"{path.name}: {error}" for path in batch_paths)
 
-            provider = session.get_providers()[0]
             self.provider_label.setText(provider)
             self.model_info_label.setText(str(model_path))
             self.model_value.setText(model_path.name)
-            self.device_value.setText("CPU")
+            self.device_value.setText("GPU" if self.use_tensorrt() else "CPU")
             self.status_ready.setText("Ready")
             self._update_status_bar()
 
@@ -1732,15 +1963,26 @@ class OverlayViewer(QMainWindow):
 
         self._update_file_progress()
 
-        model_name = (
-            self.selected_model_path.name
-            if self.selected_model_path
-            else (
-                self.onnx_model_path.name
-                if self.onnx_model_path
-                else "—"
+        if self.use_tensorrt():
+            model_name = (
+                self.selected_engine_path.name
+                if self.selected_engine_path
+                else (
+                    self.trt_engine_path.name
+                    if self.trt_engine_path
+                    else "—"
+                )
             )
-        )
+        else:
+            model_name = (
+                self.selected_model_path.name
+                if self.selected_model_path
+                else (
+                    self.onnx_model_path.name
+                    if self.onnx_model_path
+                    else "—"
+                )
+            )
 
         image_name = self.image_path.name if self.image_path else "—"
 
@@ -1757,7 +1999,7 @@ class OverlayViewer(QMainWindow):
         )
 
         self.status_model.setText(f"Model: {model_name}")
-        self.status_device.setText("Device: CPU")
+        self.status_device.setText(f"Device: {'GPU' if self.use_tensorrt() else 'CPU'}")
         self.status_image.setText(f"Image: {image_name}")
         self.status_size.setText(f"Size: {image_size}")
         self.status_inference.setText(f"Inference: {inference}")
@@ -1814,6 +2056,33 @@ class OverlayViewer(QMainWindow):
         QLabel {
             color: #D5E2EC;
             background: transparent;
+        }
+
+        QMessageBox {
+            background: #F7FAFC;
+            color: #1F2933;
+            font-family: "Segoe UI", "Microsoft YaHei UI";
+            font-size: 12px;
+        }
+
+        QMessageBox QLabel {
+            color: #1F2933;
+            background: transparent;
+            font-size: 12px;
+        }
+
+        QMessageBox QPushButton {
+            min-width: 68px;
+            min-height: 28px;
+            color: white;
+            background: #0F4C75;
+            border: 1px solid #0B3A59;
+            border-radius: 4px;
+            padding: 0 12px;
+        }
+
+        QMessageBox QPushButton:hover {
+            background: #12649A;
         }
 
         /* ============================================================
@@ -1996,7 +2265,8 @@ class OverlayViewer(QMainWindow):
         /* ============================================================
            ComboBox
            ============================================================ */
-        QComboBox {
+        QComboBox,
+        QDoubleSpinBox {
             min-height: 26px;
             max-height: 26px;
             color: #D7E4ED;
@@ -2007,7 +2277,8 @@ class OverlayViewer(QMainWindow):
             font-size: 10px;
         }
 
-        QComboBox:hover {
+        QComboBox:hover,
+        QDoubleSpinBox:hover {
             border-color: #337AA5;
         }
 

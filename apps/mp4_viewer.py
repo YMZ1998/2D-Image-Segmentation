@@ -12,6 +12,7 @@ from PyQt5.QtCore import QSettings, QTimer, Qt
 from PyQt5.QtGui import QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -50,6 +51,12 @@ class Mp4Viewer(QMainWindow):
         self.prediction_mask = None
         self.onnx_session = None
         self.onnx_model_path: Path | None = None
+        self.trt_engine = None
+        self.trt_context = None
+        self.trt_cuda = None
+        self.trt_input_name: str | None = None
+        self.trt_output_name: str | None = None
+        self.trt_engine_path: Path | None = None
         self.settings = QSettings("2D-Image-Segmentation", "Mp4Viewer")
 
         self.timer = QTimer(self)
@@ -72,7 +79,11 @@ class Mp4Viewer(QMainWindow):
         self.pseudocolor_button = QPushButton("伪彩色")
         self.pseudocolor_button.setCheckable(True)
         self.pseudocolor_button.toggled.connect(self.refresh_current_frame)
-        self.onnx_button = QPushButton("ONNX 分割")
+        self.backend_box = QComboBox()
+        self.backend_box.addItems(("ONNX", "TensorRT"))
+        self.backend_box.setCurrentText(self.settings.value("inference_backend", "ONNX"))
+        self.backend_box.currentTextChanged.connect(self.change_inference_backend)
+        self.onnx_button = QPushButton("AI 分割")
         self.onnx_button.setCheckable(True)
         self.onnx_button.toggled.connect(self.toggle_onnx)
         previous_button = QPushButton("上一帧")
@@ -108,6 +119,8 @@ class Mp4Viewer(QMainWindow):
         controls.addWidget(self.play_button)
         controls.addWidget(next_button)
         controls.addWidget(self.pseudocolor_button)
+        controls.addWidget(QLabel("后端："))
+        controls.addWidget(self.backend_box)
         controls.addWidget(self.onnx_button)
         controls.addWidget(QLabel("分割透明度："))
         controls.addWidget(self.alpha_slider)
@@ -208,7 +221,7 @@ class Mp4Viewer(QMainWindow):
             except Exception as error:
                 self.pause()
                 self.onnx_button.setChecked(False)
-                QMessageBox.critical(self, "ONNX 分割失败", str(error))
+                QMessageBox.critical(self, "AI 分割失败", str(error))
                 return
         self.show_current_frame()
         self.update_position_labels()
@@ -267,10 +280,10 @@ class Mp4Viewer(QMainWindow):
     def toggle_onnx(self, enabled: bool) -> None:
         if not enabled:
             self.prediction_mask = None
-            self.onnx_button.setText("ONNX 分割")
+            self.onnx_button.setText("AI 分割")
             self.show_current_frame()
             return
-        self.onnx_button.setText("关闭 ONNX 分割")
+        self.onnx_button.setText("关闭 AI 分割")
         if self.current_rgb is not None:
             try:
                 self.predict_current_frame()
@@ -279,13 +292,41 @@ class Mp4Viewer(QMainWindow):
                 self.onnx_button.blockSignals(True)
                 self.onnx_button.setChecked(False)
                 self.onnx_button.blockSignals(False)
-                self.onnx_button.setText("ONNX 分割")
-                QMessageBox.critical(self, "ONNX 分割失败", str(error))
+                self.onnx_button.setText("AI 分割")
+                QMessageBox.critical(self, "AI 分割失败", str(error))
+
+    def change_inference_backend(self, backend: str) -> None:
+        self.settings.setValue("inference_backend", backend)
+        self.prediction_mask = None
+        self.onnx_session = None
+        self.onnx_model_path = None
+        self.trt_engine = None
+        self.trt_context = None
+        self.trt_cuda = None
+        self.trt_input_name = None
+        self.trt_output_name = None
+        self.trt_engine_path = None
+        if self.onnx_button.isChecked() and self.current_rgb is not None:
+            try:
+                self.predict_current_frame()
+            except Exception as error:
+                self.onnx_button.setChecked(False)
+                QMessageBox.critical(self, "AI 分割失败", str(error))
+        self.show_current_frame()
+
+    def use_tensorrt(self) -> bool:
+        return self.backend_box.currentText() == "TensorRT"
 
     def predict_current_frame(self) -> None:
+        if self.use_tensorrt():
+            self.predict_current_frame_tensorrt()
+        else:
+            self.predict_current_frame_onnx()
+
+    def predict_current_frame_onnx(self) -> None:
         import onnxruntime as ort
 
-        model_path = newest_onnx(Path("../save_weights"))
+        model_path = newest_onnx(PROJECT_ROOT / "save_weights")
         if self.onnx_session is None or model_path != self.onnx_model_path:
             providers = ["CPUExecutionProvider"]
             if "CUDAExecutionProvider" in ort.get_available_providers():
@@ -303,6 +344,79 @@ class Mp4Viewer(QMainWindow):
         ).astype(np.uint8)
         self.statusBar().showMessage(
             f"ONNX：{model_path.name} · {self.onnx_session.get_providers()[0]}", 3000
+        )
+
+    def ensure_tensorrt_session(self) -> Path:
+        from scripts.inference.predict_single_tensorrt import (
+            binding_names,
+            build_engine_from_onnx,
+            import_trt_runtime,
+            is_input,
+            load_engine,
+            matching_onnx_for_engine,
+            newest_engine,
+        )
+
+        engine_path = newest_engine(PROJECT_ROOT / "save_weights")
+        if self.trt_engine is None or engine_path != self.trt_engine_path:
+            trt, cuda = import_trt_runtime()
+            try:
+                engine = load_engine(engine_path, trt)
+            except RuntimeError:
+                engine = build_engine_from_onnx(
+                    onnx_path=matching_onnx_for_engine(engine_path),
+                    engine_path=engine_path,
+                    trt=trt,
+                    fp16=False,
+                    workspace_gb=2.0,
+                )
+
+            context = engine.create_execution_context()
+            names = binding_names(engine)
+            input_names = [name for name in names if is_input(engine, name)]
+            output_names = [name for name in names if not is_input(engine, name)]
+            if len(input_names) != 1 or len(output_names) < 1:
+                raise RuntimeError(
+                    f"Expected one TensorRT input and at least one output, got {input_names}, {output_names}"
+                )
+
+            self.trt_engine = engine
+            self.trt_context = context
+            self.trt_cuda = cuda
+            self.trt_input_name = input_names[0]
+            self.trt_output_name = output_names[0]
+            self.trt_engine_path = engine_path
+        return engine_path
+
+    def predict_current_frame_tensorrt(self) -> None:
+        from scripts.inference.predict_single_tensorrt import (
+            execute,
+            output_to_mask,
+            prepare_input,
+            tensor_shape,
+        )
+
+        engine_path = self.ensure_tensorrt_session()
+        gray = self.processed_gray(self.current_rgb)
+        input_shape = tuple(
+            dim if isinstance(dim, int) and dim > 0 else IMAGE_SIZE
+            for dim in tensor_shape(self.trt_engine, self.trt_context, self.trt_input_name)
+        )
+        tensor, _, _ = prepare_input(gray, input_shape, IMAGE_SIZE)
+        output, elapsed_ms = execute(
+            self.trt_engine,
+            self.trt_context,
+            self.trt_cuda,
+            self.trt_input_name,
+            self.trt_output_name,
+            tensor,
+        )
+        prediction = output_to_mask(output)
+        self.prediction_mask = cv2.resize(
+            prediction, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST
+        ).astype(np.uint8)
+        self.statusBar().showMessage(
+            f"TensorRT：{engine_path.name} · {elapsed_ms:.1f} ms", 3000
         )
 
     def update_position_labels(self) -> None:
@@ -335,6 +449,7 @@ class Mp4Viewer(QMainWindow):
         if self.video_path is not None:
             self.settings.setValue("last_video", str(self.video_path))
             self.settings.setValue("last_directory", str(self.video_path.parent))
+            self.settings.setValue("inference_backend", self.backend_box.currentText())
         self.settings.sync()
         self.release_video()
         super().closeEvent(event)
