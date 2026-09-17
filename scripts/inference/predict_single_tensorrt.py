@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--onnx", type=Path, help="ONNX path used to rebuild an incompatible engine")
     parser.add_argument("--fp16", action="store_true", help="Rebuild TensorRT engine with FP16 when supported")
-    parser.add_argument("--workspace-gb", type=float, default=2.0, help="TensorRT build workspace in GB")
+    parser.add_argument("--workspace-gb", type=float, default=6.0, help="TensorRT build workspace in GB")
     parser.add_argument(
         "--no-rebuild-engine",
         action="store_true",
@@ -282,14 +282,19 @@ def main() -> None:
     if not args.image.is_file():
         raise FileNotFoundError(f"Image not found: {args.image}")
     engine_path = args.engine or newest_engine()
-    if not engine_path.is_file():
-        raise FileNotFoundError(f"TensorRT engine not found: {engine_path}")
-    if not 0 <= args.alpha <= 1:
-        raise ValueError("--alpha must be between 0 and 1")
-
     trt, cuda = import_trt_runtime()
     try:
-        engine = load_engine(engine_path, trt)
+        if not engine_path.is_file():
+            onnx_path = args.onnx or matching_onnx_for_engine(engine_path)
+            engine = build_engine_from_onnx(
+                onnx_path=onnx_path,
+                engine_path=engine_path,
+                trt=trt,
+                fp16=args.fp16,
+                workspace_gb=args.workspace_gb,
+            )
+        else:
+            engine = load_engine(engine_path, trt)
     except RuntimeError as error:
         if args.no_rebuild_engine:
             raise

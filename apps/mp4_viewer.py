@@ -12,6 +12,7 @@ from PyQt5.QtCore import QSettings, QTimer, Qt
 from PyQt5.QtGui import QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -32,7 +33,7 @@ from inference_utils import (
     onnx_output_to_mask,
     prepare_onnx_input,
 )
-from segmentation_config import CLASS_COLORS, IMAGE_SIZE
+from segmentation_config import CLASS_COLORS, CLASS_NAMES, IMAGE_SIZE
 
 
 class Mp4Viewer(QMainWindow):
@@ -49,6 +50,7 @@ class Mp4Viewer(QMainWindow):
         self.fps = 25.0
         self.duration_seconds = 0.0
         self.prediction_mask = None
+        self.class_visibility_boxes: dict[int, QCheckBox] = {}
         self.onnx_session = None
         self.onnx_model_path: Path | None = None
         self.trt_engine = None
@@ -109,6 +111,25 @@ class Mp4Viewer(QMainWindow):
         self.alpha_slider.valueChanged.connect(self.refresh_current_frame)
         self.alpha_label = QLabel("55%")
         self.alpha_slider.valueChanged.connect(lambda value: self.alpha_label.setText(f"{value}%"))
+        self.show_labels_button = QPushButton("标签显示")
+        self.show_labels_button.setCheckable(True)
+        self.show_labels_button.setChecked(True)
+        self.show_labels_button.toggled.connect(self.toggle_label_controls)
+        self.label_controls = QWidget()
+        label_controls_layout = QHBoxLayout(self.label_controls)
+        label_controls_layout.setContentsMargins(0, 0, 0, 0)
+        label_controls_layout.setSpacing(8)
+        for class_id, class_name in enumerate(CLASS_NAMES):
+            if class_id == 0:
+                continue
+            checkbox = QCheckBox(class_name)
+            checkbox.setChecked(
+                self.settings.value(f"mp4_class_visible_{class_id}", True, type=bool)
+            )
+            checkbox.toggled.connect(self.refresh_current_frame)
+            label_controls_layout.addWidget(checkbox)
+            self.class_visibility_boxes[class_id] = checkbox
+        self.toggle_label_controls(self.show_labels_button.isChecked())
 
         top_row = QHBoxLayout()
         top_row.addWidget(open_button)
@@ -125,6 +146,8 @@ class Mp4Viewer(QMainWindow):
         controls.addWidget(QLabel("分割透明度："))
         controls.addWidget(self.alpha_slider)
         controls.addWidget(self.alpha_label)
+        controls.addWidget(self.show_labels_button)
+        controls.addWidget(self.label_controls)
         controls.addWidget(self.position_slider, 1)
         controls.addWidget(self.time_label)
         controls.addWidget(self.frame_label)
@@ -270,12 +293,20 @@ class Mp4Viewer(QMainWindow):
         display = create_pseudocolor(gray) if self.pseudocolor_button.isChecked() else np.repeat(gray[..., None], 3, axis=2)
         if self.prediction_mask is not None:
             colors = np.asarray(CLASS_COLORS, dtype=np.uint8)
-            foreground = self.prediction_mask != 0
+            foreground = np.zeros_like(self.prediction_mask, dtype=bool)
+            for class_id, checkbox in self.class_visibility_boxes.items():
+                if checkbox.isChecked():
+                    foreground |= self.prediction_mask == class_id
             alpha = self.alpha_slider.value() / 100
             display[foreground] = (
                 (1 - alpha) * display[foreground] + alpha * colors[self.prediction_mask[foreground]]
             ).astype(np.uint8)
         return np.ascontiguousarray(display)
+
+    def toggle_label_controls(self, visible: bool) -> None:
+        self.label_controls.setVisible(visible)
+        self.show_labels_button.setText("隐藏标签" if visible else "标签显示")
+        self.refresh_current_frame()
 
     def toggle_onnx(self, enabled: bool) -> None:
         if not enabled:
@@ -450,6 +481,8 @@ class Mp4Viewer(QMainWindow):
             self.settings.setValue("last_video", str(self.video_path))
             self.settings.setValue("last_directory", str(self.video_path.parent))
             self.settings.setValue("inference_backend", self.backend_box.currentText())
+        for class_id, checkbox in self.class_visibility_boxes.items():
+            self.settings.setValue(f"mp4_class_visible_{class_id}", checkbox.isChecked())
         self.settings.sync()
         self.release_video()
         super().closeEvent(event)

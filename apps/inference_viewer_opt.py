@@ -145,6 +145,8 @@ class OverlayViewer(QMainWindow):
         self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self.play_next_prediction)
         self.is_playing = False
+        self.is_batch_predicting = False
+        self.stop_batch_requested = False
         self.source_image: Image.Image | None = None
         self.prediction_mask: Image.Image | None = None
         self.prediction_rendered: Image.Image | None = None
@@ -173,7 +175,7 @@ class OverlayViewer(QMainWindow):
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_image_file)
         self.inference_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.inference_shortcut.activated.connect(self.run_onnx_prediction)
-        QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=self.run_all_predictions)
+        QShortcut(QKeySequence("Ctrl+Shift+P"), self, activated=self.toggle_batch_prediction)
         QShortcut(QKeySequence("Ctrl+Shift+Space"), self, activated=self.toggle_auto_play)
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self.choose_model_file)
         QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self.change_image(-1))
@@ -277,7 +279,7 @@ class OverlayViewer(QMainWindow):
         predict_all_btn = QPushButton("一键预测全部")
         predict_all_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         predict_all_btn.setIconSize(QSize(14, 14))
-        predict_all_btn.clicked.connect(self.run_all_predictions)
+        predict_all_btn.clicked.connect(self.toggle_batch_prediction)
         layout.addWidget(predict_all_btn)
         self.predict_all_button = predict_all_btn
 
@@ -348,24 +350,6 @@ class OverlayViewer(QMainWindow):
         self.model_button = QPushButton("选择模型…")
         self.model_button.clicked.connect(self.choose_model_file)
         layout.addWidget(self.model_button)
-
-        device_row = QHBoxLayout()
-        device_row.setSpacing(8)
-        device_row.addWidget(QLabel("Device"))
-        device_row.addStretch(1)
-        device_value = QLabel("CPU")
-        device_value.setObjectName("strongValue")
-        device_row.addWidget(device_value)
-        layout.addLayout(device_row)
-
-        provider_row = QHBoxLayout()
-        provider_row.setSpacing(8)
-        provider_row.addWidget(QLabel("Provider"))
-        provider_row.addStretch(1)
-        self.provider_label = QLabel(self.current_provider_text())
-        self.provider_label.setObjectName("mutedLabel")
-        provider_row.addWidget(self.provider_label)
-        layout.addLayout(provider_row)
 
         layout.addWidget(self._divider())
 
@@ -629,7 +613,6 @@ class OverlayViewer(QMainWindow):
         self.resolution_value = self._add_info_row(layout, "图像尺寸", "—")
         self.file_value = self._add_info_row(layout, "文件名", "—")
         self.model_value = self._add_info_row(layout, "模型", "—")
-        self.device_value = self._add_info_row(layout, "设备", "CPU")
         self.inference_value = self._add_info_row(layout, "推理时间", "—")
 
         self.pixel_label = QLabel("鼠标悬浮影像查看像素与分类")
@@ -667,12 +650,6 @@ class OverlayViewer(QMainWindow):
         self.status_model = QLabel("Model: —")
         self.status_model.setObjectName("statusText")
         row.addWidget(self.status_model)
-
-        row.addWidget(self._status_separator())
-
-        self.status_device = QLabel("Device: CPU")
-        self.status_device.setObjectName("statusText")
-        row.addWidget(self.status_device)
 
         row.addWidget(self._status_separator())
 
@@ -830,8 +807,8 @@ class OverlayViewer(QMainWindow):
             self.source_image = Image.open(path).convert("RGBA")
 
             cached = self.load_cached_prediction(path)
-            if not cached and not self.is_playing:
-                self.clear_prediction()
+            if not cached:
+                self.clear_prediction(keep_canvas=self.is_playing)
             self.zoom_factor = 1.0
             self.pan_offset = QPoint()
             if not cached:
@@ -844,6 +821,8 @@ class OverlayViewer(QMainWindow):
             self.file_value.setText(path.name)
 
             self.update_source_image()
+            if cached:
+                self.render_prediction()
             self._update_status_bar()
 
             self.status_ready.setText("Ready")
@@ -1019,7 +998,8 @@ class OverlayViewer(QMainWindow):
         self.reset_inference_sessions()
         self.clear_prediction()
         self.model_info_label.setText(self.current_model_label_text())
-        self.provider_label.setText(self.current_provider_text())
+        if hasattr(self, "provider_label"):
+            self.provider_label.setText(self.current_provider_text())
         self.model_button.setText("选择 TensorRT Engine…" if self.use_tensorrt() else "选择 ONNX 模型…")
         self._update_status_bar()
 
@@ -1322,12 +1302,12 @@ class OverlayViewer(QMainWindow):
     def fit_to_window(self) -> None:
         self.reset_zoom()
 
-    def clear_prediction(self) -> None:
+    def clear_prediction(self, keep_canvas: bool = False) -> None:
         self.prediction_mask = None
         self.prediction_rendered = None
         self.last_inference_ms = None
 
-        if hasattr(self, "prediction_label"):
+        if hasattr(self, "prediction_label") and not keep_canvas:
             self.prediction_label.clear()
             self.prediction_label.setText("暂无预测结果")
 
@@ -1706,10 +1686,10 @@ class OverlayViewer(QMainWindow):
             self.render_prediction()
             self.update_prediction_stats(np.asarray(mask))
 
-            self.provider_label.setText(provider)
+            if hasattr(self, "provider_label"):
+                self.provider_label.setText(provider)
             self.model_info_label.setText(str(model_path))
             self.model_value.setText(model_path.name)
-            self.device_value.setText("GPU" if self.use_tensorrt() else "CPU")
             self.inference_value.setText(f"{elapsed_ms:.1f} ms")
 
             self.status_ready.setText("Ready")
@@ -1728,7 +1708,23 @@ class OverlayViewer(QMainWindow):
                 self.predict_all_button.setEnabled(True)
             QApplication.processEvents()
 
+    def toggle_batch_prediction(self) -> None:
+        if self.is_batch_predicting:
+            self.stop_batch_requested = True
+            if hasattr(self, "predict_all_button"):
+                self.predict_all_button.setText("正在停止…")
+                self.predict_all_button.setEnabled(False)
+            self.status_ready.setText("Stopping batch")
+            QApplication.processEvents()
+            return
+
+        self.run_all_predictions()
+
     def run_all_predictions(self) -> None:
+        if self.is_batch_predicting:
+            self.stop_batch_requested = True
+            return
+
         if self.image_path is None:
             QMessageBox.information(self, "提示", "请先选择 OCT 图像目录中的任意一张图像")
             return
@@ -1743,10 +1739,13 @@ class OverlayViewer(QMainWindow):
             QMessageBox.information(self, "提示", "当前目录没有可预测的图像")
             return
 
+        self.is_batch_predicting = True
+        self.stop_batch_requested = False
         self.run_button.setEnabled(False)
         if hasattr(self, "predict_all_button"):
-            self.predict_all_button.setEnabled(False)
-            self.predict_all_button.setText("批量中…")
+            self.predict_all_button.setEnabled(True)
+            self.predict_all_button.setText("停止批量")
+            self.predict_all_button.setIcon(self.style().standardIcon(QStyle.SP_BrowserStop))
         self.status_ready.setText("Batch inferencing")
         QApplication.processEvents()
 
@@ -1772,30 +1771,45 @@ class OverlayViewer(QMainWindow):
                 batch_size = min(batch_size, BATCH_INFERENCE_SIZE)
 
             for batch_start in range(0, len(image_paths), batch_size):
+                if self.stop_batch_requested:
+                    break
+
                 batch_paths = image_paths[batch_start:batch_start + batch_size]
                 self.status_ready.setText(
                     f"Batch {batch_start + 1}-{batch_start + len(batch_paths)}/{len(image_paths)}"
                 )
                 QApplication.processEvents()
+                if self.stop_batch_requested:
+                    break
 
                 try:
                     sources = []
                     for path in batch_paths:
+                        if self.stop_batch_requested:
+                            break
                         with Image.open(path) as image:
                             sources.append(image.convert("RGBA"))
+                    if self.stop_batch_requested or not sources:
+                        break
+
                     if self.use_tensorrt():
-                        start = time.perf_counter()
                         masks = []
                         elapsed_ms = 0.0
                         for source in sources:
+                            if self.stop_batch_requested:
+                                break
                             mask, single_ms = self.predict_mask_for_image(source)
                             masks.append(mask)
                             elapsed_ms += single_ms
                     else:
                         masks, elapsed_ms = self.predict_masks_for_images(sources)
+                    if self.stop_batch_requested and not masks:
+                        break
                     per_image_ms = elapsed_ms / len(batch_paths)
 
                     for path, mask in zip(batch_paths, masks):
+                        if self.stop_batch_requested:
+                            break
                         self.save_cached_prediction(path, mask, model_path)
                         completed += 1
                         total_ms += per_image_ms
@@ -1809,13 +1823,14 @@ class OverlayViewer(QMainWindow):
                 except Exception as error:
                     failed.extend(f"{path.name}: {error}" for path in batch_paths)
 
-            self.provider_label.setText(provider)
+            if hasattr(self, "provider_label"):
+                self.provider_label.setText(provider)
             self.model_info_label.setText(str(model_path))
             self.model_value.setText(model_path.name)
-            self.device_value.setText("GPU" if self.use_tensorrt() else "CPU")
             self.status_ready.setText("Ready")
             self._update_status_bar()
 
+            stopped = self.stop_batch_requested
             message = f"已完成 {completed}/{len(image_paths)} 张，缓存目录：{self.overlay_dir}"
             if completed:
                 message += f"\n平均推理时间：{total_ms / completed:.1f} ms"
@@ -1823,17 +1838,24 @@ class OverlayViewer(QMainWindow):
                 message += "\n\n失败：\n" + "\n".join(failed[:10])
                 if len(failed) > 10:
                     message += f"\n... 还有 {len(failed) - 10} 个失败"
-            QMessageBox.information(self, "批量预测完成", message)
+            QMessageBox.information(
+                self,
+                "批量预测已终止" if stopped else "批量预测完成",
+                message,
+            )
 
         except Exception as error:
             self.status_ready.setText("Error")
             QMessageBox.critical(self, "批量预测失败", str(error))
 
         finally:
+            self.is_batch_predicting = False
+            self.stop_batch_requested = False
             self.run_button.setEnabled(True)
             if hasattr(self, "predict_all_button"):
                 self.predict_all_button.setEnabled(True)
                 self.predict_all_button.setText("一键预测全部")
+                self.predict_all_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
             QApplication.processEvents()
     # ==================================================================
     # Mouse interaction
@@ -1999,7 +2021,6 @@ class OverlayViewer(QMainWindow):
         )
 
         self.status_model.setText(f"Model: {model_name}")
-        self.status_device.setText(f"Device: {'GPU' if self.use_tensorrt() else 'CPU'}")
         self.status_image.setText(f"Image: {image_name}")
         self.status_size.setText(f"Size: {image_size}")
         self.status_inference.setText(f"Inference: {inference}")
