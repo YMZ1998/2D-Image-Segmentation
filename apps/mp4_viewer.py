@@ -51,6 +51,7 @@ class Mp4Viewer(QMainWindow):
         self.duration_seconds = 0.0
         self.prediction_mask = None
         self.class_visibility_boxes: dict[int, QCheckBox] = {}
+        self.progress_dragging = False
         self.onnx_session = None
         self.onnx_model_path: Path | None = None
         self.trt_engine = None
@@ -96,7 +97,11 @@ class Mp4Viewer(QMainWindow):
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.setEnabled(False)
-        self.position_slider.sliderMoved.connect(self.seek_frame)
+        self.position_slider.setMinimumHeight(24)
+        self.position_slider.setToolTip("拖动跳转视频帧")
+        self.position_slider.sliderPressed.connect(self.begin_progress_drag)
+        self.position_slider.sliderReleased.connect(self.finish_progress_drag)
+        self.position_slider.valueChanged.connect(self.update_progress_preview)
 
         self.time_label = QLabel("00:00.000 / 00:00.000")
         self.time_label.setMinimumWidth(180)
@@ -148,14 +153,18 @@ class Mp4Viewer(QMainWindow):
         controls.addWidget(self.alpha_label)
         controls.addWidget(self.show_labels_button)
         controls.addWidget(self.label_controls)
-        controls.addWidget(self.position_slider, 1)
-        controls.addWidget(self.time_label)
-        controls.addWidget(self.frame_label)
         controls.addWidget(self.resolution_label)
+
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(QLabel("播放进度："))
+        progress_row.addWidget(self.position_slider, 1)
+        progress_row.addWidget(self.time_label)
+        progress_row.addWidget(self.frame_label)
 
         layout = QVBoxLayout()
         layout.addLayout(top_row)
         layout.addWidget(self.video_label, 1)
+        layout.addLayout(progress_row)
         layout.addLayout(controls)
         container = QWidget()
         container.setLayout(layout)
@@ -255,6 +264,25 @@ class Mp4Viewer(QMainWindow):
         frame_index = max(0, min(int(frame_index), self.frame_count - 1))
         self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         self.read_next_frame()
+
+    def begin_progress_drag(self) -> None:
+        self.progress_dragging = True
+
+    def finish_progress_drag(self) -> None:
+        if not self.progress_dragging:
+            return
+        self.progress_dragging = False
+        self.seek_frame(self.position_slider.value())
+
+    def update_progress_preview(self, frame_index: int) -> None:
+        if not self.progress_dragging:
+            return
+        frame_index = max(0, min(int(frame_index), max(0, self.frame_count - 1)))
+        current_seconds = frame_index / self.fps if self.fps > 0 else 0.0
+        self.time_label.setText(
+            f"{self.format_time(current_seconds)} / {self.format_time(self.duration_seconds)}"
+        )
+        self.frame_label.setText(f"帧 {frame_index + 1} / {self.frame_count}")
 
     def step_frame(self, offset: int) -> None:
         if self.capture is None:
@@ -451,9 +479,10 @@ class Mp4Viewer(QMainWindow):
         )
 
     def update_position_labels(self) -> None:
-        self.position_slider.blockSignals(True)
-        self.position_slider.setValue(max(0, self.current_frame))
-        self.position_slider.blockSignals(False)
+        if not self.progress_dragging:
+            self.position_slider.blockSignals(True)
+            self.position_slider.setValue(max(0, self.current_frame))
+            self.position_slider.blockSignals(False)
         current_seconds = max(0, self.current_frame) / self.fps
         self.time_label.setText(
             f"{self.format_time(current_seconds)} / {self.format_time(self.duration_seconds)}"

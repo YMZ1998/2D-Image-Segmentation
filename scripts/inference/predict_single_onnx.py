@@ -25,7 +25,7 @@ from segmentation_config import CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run single-image segmentation with the latest ONNX model.")
-    parser.add_argument("image", type=Path)
+    parser.add_argument("--image", type=Path, default=r'../../input.png')
     parser.add_argument("--model", type=Path, help="ONNX path; defaults to newest save_weights/*.onnx")
     parser.add_argument("--output-dir", type=Path, default=Path("predictions_onnx"))
     parser.add_argument("--image-size", type=int, default=IMAGE_SIZE, help="fallback for dynamic ONNX dimensions")
@@ -44,7 +44,7 @@ def main() -> None:
     if not 0 <= args.alpha <= 1:
         raise ValueError("--alpha must be between 0 and 1")
 
-    model_path = args.model or newest_onnx()
+    model_path = args.model or newest_onnx(Path("../../save_weights"))
     if not model_path.is_file():
         raise FileNotFoundError(f"ONNX model not found: {model_path}")
     providers = ["CPUExecutionProvider"]

@@ -9,7 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 from PIL import Image
 from PyQt5.QtCore import QEvent, QSettings, QTimer, Qt
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QShortcut,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -45,6 +46,9 @@ class OverlayViewer(QMainWindow):
         self._init_state()
         self._init_playback()
         self._build_ui()
+        self.inference_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.inference_shortcut.setContext(Qt.WindowShortcut)
+        self.inference_shortcut.activated.connect(self.run_onnx_prediction)
         self.refresh_samples()
 
     # ------------------------------------------------------------------

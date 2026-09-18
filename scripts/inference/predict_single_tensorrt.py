@@ -18,7 +18,6 @@ from inference_utils import (
 )
 from segmentation_config import CLASS_NAMES, IMAGE_SIZE, ROI_RADIUS_RATIO
 
-
 TRT_DTYPE_TO_NUMPY = {
     "FLOAT": np.float32,
     "HALF": np.float16,
@@ -62,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run single-image OCT segmentation with a TensorRT engine."
     )
-    parser.add_argument("--image", type=Path,default=r'D:\Code\2D-Image-Segmentation\data\oct_dataset\test\image\03_frame_000001.png')
+    parser.add_argument("--image", type=Path, default=r'../../input.png')
     parser.add_argument(
         "--engine",
         type=Path,
@@ -109,11 +108,11 @@ def load_engine(engine_path: Path, trt):
 
 
 def build_engine_from_onnx(
-    onnx_path: Path,
-    engine_path: Path,
-    trt,
-    fp16: bool = False,
-    workspace_gb: float = 2.0,
+        onnx_path: Path,
+        engine_path: Path,
+        trt,
+        fp16: bool = False,
+        workspace_gb: float = 2.0,
 ):
     if not onnx_path.is_file():
         raise FileNotFoundError(f"ONNX model not found for TensorRT rebuild: {onnx_path}")
@@ -218,7 +217,8 @@ def infer_layout_and_size(shape: tuple[int, ...], fallback_size: int) -> tuple[s
     return "NCHW", 1, fallback_size, fallback_size
 
 
-def prepare_input(gray: np.ndarray, shape: tuple[int, ...], fallback_size: int) -> tuple[np.ndarray, str, tuple[int, int]]:
+def prepare_input(gray: np.ndarray, shape: tuple[int, ...], fallback_size: int) -> tuple[
+    np.ndarray, str, tuple[int, int]]:
     shape = tuple(fallback_size if dim < 0 else dim for dim in shape)
     layout, channels, height, width = infer_layout_and_size(shape, fallback_size)
     resized = np.asarray(
