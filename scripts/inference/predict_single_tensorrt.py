@@ -98,12 +98,29 @@ def import_trt_runtime():
 
 
 def load_engine(engine_path: Path, trt):
+    total_start = time.perf_counter()
+
     logger = trt.Logger(trt.Logger.WARNING)
     runtime = trt.Runtime(logger)
+
+    start = time.perf_counter()
     with engine_path.open("rb") as file:
-        engine = runtime.deserialize_cuda_engine(file.read())
+        engine_data = file.read()
+    read_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+    engine = runtime.deserialize_cuda_engine(engine_data)
+    deserialize_time = time.perf_counter() - start
+
     if engine is None:
         raise RuntimeError(f"Failed to deserialize TensorRT engine: {engine_path}")
+
+    total_time = time.perf_counter() - total_start
+
+    print(f"Engine 文件读取: {read_time:.3f} s")
+    print(f"Engine 反序列化: {deserialize_time:.3f} s")
+    print(f"Engine 总加载耗时: {total_time:.3f} s")
+
     return engine
 
 

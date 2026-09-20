@@ -8,7 +8,7 @@ import cv2
 
 import json
 
-DEFAULT_ROOT = Path(r"D:\Filez\李进\DownLoad\12、影像资料\美国临床：支架内再狭窄")
+DEFAULT_ROOT = Path(r"D:\Filez")
 
 
 def find_mp4_files(root: Path) -> list[Path]:

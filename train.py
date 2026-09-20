@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from parse_args import parse_args, get_model, get_best_weight_path, get_latest_weight_path, get_device
 from utils.dataset import MyDataset
-from utils.train_and_eval import CLASS_NAMES, train_one_epoch, evaluate, create_lr_scheduler
+from utils.train_and_eval import CLASS_NAMES, train_one_epoch, evaluate
 
 
 # tensorboard --logdir=./runs --port=2000

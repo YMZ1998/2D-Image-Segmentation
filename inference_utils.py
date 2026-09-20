@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import ImageOps
 
 from segmentation_config import (
     CLASS_COLORS,

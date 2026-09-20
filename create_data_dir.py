@@ -1,5 +1,3 @@
-import os
-
 from scripts.data_tools.common import remove_and_create_dir
 
 if __name__ == "__main__":
