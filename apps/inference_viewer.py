@@ -32,7 +32,7 @@ from inference_utils import newest_onnx, onnx_output_to_mask, prepare_onnx_input
 from segmentation_config import CLASS_COLORS, CLASS_DISPLAY_VALUES, CLASS_NAMES, IMAGE_SIZE
 
 DEFAULT_IMAGE_DIR = Path(r"D:\data\OCT")
-model_path = newest_onnx(Path("../save_weights"))
+model_path = newest_onnx(PROJECT_ROOT / "save_weights")
 # OCT 圆环参数
 OCT_OUTER_RADIUS_RATIO = 0.49
 

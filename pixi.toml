@@ -1,0 +1,30 @@
+[workspace]
+authors = ["YMZ <1320439118@qq.com>"]
+channels = ["conda-forge"]
+name = "2D-Image-Segmentation"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[tool.pixi.workspace]
+channels = [
+    "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/"
+]
+platforms = ["win-64"]
+
+[tool.pixi.pypi-options]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[dependencies]
+python = "3.10.*"
+numpy = ">=2.2.6,<3"
+opencv = ">=5.0.0,<6"
+scipy = ">=1.15.2,<2"
+pillow = ">=12.3.0,<13"
+pip = ">=26.2.1,<27"
+
+[pypi-dependencies]
+pyqt5 = ">=5.15.11, <6"
+onnxruntime = ">=1.23.2, <2"
+matplotlib = ">=3.10.9, <4"

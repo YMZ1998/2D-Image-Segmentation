@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import ImageOps
+from PIL import Image
 
 from segmentation_config import (
     CLASS_COLORS,
