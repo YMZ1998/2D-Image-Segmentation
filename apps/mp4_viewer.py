@@ -1,4 +1,5 @@
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -14,14 +15,19 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QShortcut,
     QSlider,
+    QDoubleSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -93,6 +99,8 @@ class Mp4Viewer(QMainWindow):
         previous_button.clicked.connect(lambda: self.step_frame(-1))
         next_button = QPushButton("下一帧")
         next_button.clicked.connect(lambda: self.step_frame(1))
+        self.export_button = QPushButton("导出分割视频")
+        self.export_button.clicked.connect(self.export_segmented_video)
 
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
@@ -153,6 +161,7 @@ class Mp4Viewer(QMainWindow):
         controls.addWidget(self.alpha_label)
         controls.addWidget(self.show_labels_button)
         controls.addWidget(self.label_controls)
+        controls.addWidget(self.export_button)
         controls.addWidget(self.resolution_label)
 
         progress_row = QHBoxLayout()
@@ -317,19 +326,218 @@ class Mp4Viewer(QMainWindow):
         return clean_circular_roi(gray)
 
     def compose_display_frame(self) -> np.ndarray:
-        gray = self.processed_gray(self.current_rgb)
-        display = create_pseudocolor(gray) if self.pseudocolor_button.isChecked() else np.repeat(gray[..., None], 3, axis=2)
-        if self.prediction_mask is not None:
-            colors = np.asarray(CLASS_COLORS, dtype=np.uint8)
-            foreground = np.zeros_like(self.prediction_mask, dtype=bool)
-            for class_id, checkbox in self.class_visibility_boxes.items():
-                if checkbox.isChecked():
-                    foreground |= self.prediction_mask == class_id
-            alpha = self.alpha_slider.value() / 100
-            display[foreground] = (
-                (1 - alpha) * display[foreground] + alpha * colors[self.prediction_mask[foreground]]
-            ).astype(np.uint8)
+        return self.compose_frame(self.current_rgb, self.prediction_mask)
+
+    def compose_frame(
+        self,
+        frame_rgb: np.ndarray,
+        prediction_mask: np.ndarray | None,
+    ) -> np.ndarray:
+        gray = self.processed_gray(frame_rgb)
+        display = (
+            create_pseudocolor(gray)
+            if self.pseudocolor_button.isChecked()
+            else np.repeat(gray[..., None], 3, axis=2)
+        )
+        if prediction_mask is None:
+            return np.ascontiguousarray(display)
+
+        colors = np.asarray(CLASS_COLORS, dtype=np.uint8)
+        foreground = np.zeros_like(prediction_mask, dtype=bool)
+        for class_id, checkbox in self.class_visibility_boxes.items():
+            if checkbox.isChecked():
+                foreground |= prediction_mask == class_id
+        alpha = self.alpha_slider.value() / 100
+        display[foreground] = (
+            (1 - alpha) * display[foreground]
+            + alpha * colors[prediction_mask[foreground]]
+        ).astype(np.uint8)
         return np.ascontiguousarray(display)
+
+    def export_segmented_video(self) -> None:
+        if self.video_path is None:
+            QMessageBox.information(self, "提示", "请先打开视频")
+            return
+
+        range_dialog = QDialog(self)
+        range_dialog.setWindowTitle("选择预测时间段")
+        range_form = QFormLayout(range_dialog)
+        start_spin = QDoubleSpinBox()
+        end_spin = QDoubleSpinBox()
+        for spin in (start_spin, end_spin):
+            spin.setRange(0.0, self.duration_seconds)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.1)
+            spin.setSuffix(" 秒")
+        start_spin.setValue(0.0)
+        end_spin.setValue(self.duration_seconds)
+        range_form.addRow("开始时间", start_spin)
+        range_form.addRow("结束时间", end_spin)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(range_dialog.accept)
+        buttons.rejected.connect(range_dialog.reject)
+        range_form.addRow(buttons)
+        if range_dialog.exec_() != QDialog.Accepted:
+            return
+
+        start_frame = max(0, int(start_spin.value() * self.fps))
+        end_frame = min(
+            self.frame_count,
+            math.ceil(end_spin.value() * self.fps),
+        )
+        if end_frame <= start_frame:
+            QMessageBox.warning(self, "时间段无效", "结束时间必须晚于开始时间")
+            return
+
+        default_path = self.video_path.with_name(
+            f"{self.video_path.stem}_{start_spin.value():.3f}-{end_spin.value():.3f}s_segmented.mp4"
+        )
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出分割视频",
+            str(default_path),
+            "MP4 视频 (*.mp4)",
+        )
+        if not selected:
+            return
+        output_path = Path(selected)
+        if output_path.suffix.lower() != ".mp4":
+            output_path = output_path.with_suffix(".mp4")
+        if output_path.resolve() == self.video_path.resolve():
+            QMessageBox.warning(self, "导出失败", "输出路径不能覆盖原视频")
+            return
+
+        capture = cv2.VideoCapture(str(self.video_path))
+        if not capture.isOpened():
+            capture.release()
+            QMessageBox.critical(self, "导出失败", "无法重新读取原视频")
+            return
+
+        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        export_frame_count = end_frame - start_frame
+        export_fps = float(capture.get(cv2.CAP_PROP_FPS))
+        if export_fps <= 0:
+            export_fps = self.fps
+
+        writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            export_fps,
+            (width, height),
+        )
+        if not writer.isOpened():
+            capture.release()
+            writer.release()
+            QMessageBox.critical(self, "导出失败", f"无法创建视频文件：\n{output_path}")
+            return
+
+        progress = QProgressDialog(
+            "正在逐帧预测并导出…",
+            "取消",
+            0,
+            export_frame_count,
+            self,
+        )
+        progress.setWindowTitle("导出分割视频")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        self.export_button.setEnabled(False)
+        was_playing = self.timer.isActive()
+        self.pause()
+        completed = 0
+        try:
+            while completed < export_frame_count:
+                if progress.wasCanceled():
+                    break
+                success, frame_bgr = capture.read()
+                if not success:
+                    break
+
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                gray = self.processed_gray(frame_rgb)
+                if self.use_tensorrt():
+                    self.ensure_tensorrt_session()
+                    from scripts.inference.predict_single_tensorrt import (
+                        execute,
+                        output_to_mask,
+                        prepare_input,
+                        tensor_shape,
+                    )
+
+                    input_shape = tuple(
+                        dim if isinstance(dim, int) and dim > 0 else IMAGE_SIZE
+                        for dim in tensor_shape(
+                            self.trt_engine, self.trt_context, self.trt_input_name
+                        )
+                    )
+                    tensor, _, _ = prepare_input(gray, input_shape, IMAGE_SIZE)
+                    output, _ = execute(
+                        self.trt_engine,
+                        self.trt_context,
+                        self.trt_cuda,
+                        self.trt_input_name,
+                        self.trt_output_name,
+                        tensor,
+                    )
+                    prediction = output_to_mask(output)
+                else:
+                    import onnxruntime as ort
+
+                    model_path = newest_onnx(PROJECT_ROOT / "save_weights")
+                    if self.onnx_session is None or model_path != self.onnx_model_path:
+                        providers = ["CPUExecutionProvider"]
+                        if "CUDAExecutionProvider" in ort.get_available_providers():
+                            providers.insert(0, "CUDAExecutionProvider")
+                        self.onnx_session = ort.InferenceSession(
+                            str(model_path), providers=providers
+                        )
+                        self.onnx_model_path = model_path
+                    input_meta = self.onnx_session.get_inputs()[0]
+                    tensor, _, _ = prepare_onnx_input(
+                        gray, input_meta.shape, IMAGE_SIZE
+                    )
+                    output = self.onnx_session.run(
+                        None, {input_meta.name: tensor}
+                    )[0]
+                    prediction = onnx_output_to_mask(output)
+
+                prediction = cv2.resize(
+                    prediction, (width, height), interpolation=cv2.INTER_NEAREST
+                ).astype(np.uint8)
+                display_rgb = self.compose_frame(frame_rgb, prediction)
+                writer.write(cv2.cvtColor(display_rgb, cv2.COLOR_RGB2BGR))
+                completed += 1
+                progress.setValue(completed)
+                QApplication.processEvents()
+
+            canceled = progress.wasCanceled()
+            progress.close()
+            if canceled:
+                writer.release()
+                capture.release()
+                output_path.unlink(missing_ok=True)
+                QMessageBox.information(
+                    self, "导出已取消", f"已处理 {completed} 帧，未保留不完整文件。"
+                )
+            else:
+                QMessageBox.information(
+                    self, "导出完成", f"已导出 {completed} 帧：\n{output_path}"
+                )
+        except Exception as error:
+            writer.release()
+            capture.release()
+            output_path.unlink(missing_ok=True)
+            QMessageBox.critical(self, "导出失败", str(error))
+        finally:
+            writer.release()
+            capture.release()
+            progress.close()
+            self.export_button.setEnabled(True)
+            if was_playing:
+                self.timer.start()
+                self.play_button.setText("暂停")
 
     def toggle_label_controls(self, visible: bool) -> None:
         self.label_controls.setVisible(visible)
