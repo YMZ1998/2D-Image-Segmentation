@@ -40,7 +40,10 @@ def newest_engine(directory: Path = Path("../save_weights")) -> Path:
         raise FileNotFoundError(
             f"No TensorRT engine found in {directory} (*.engine, *.plan, *.trt)"
         )
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    engine_path = max(candidates, key=lambda path: path.stat().st_mtime)
+    # print("engine_path:", engine_path)
+
+    return engine_path
 
 
 def newest_onnx(directory: Path = Path("save_weights")) -> Path:
@@ -65,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--engine",
         type=Path,
-        default=r'D:\Code\2D-Image-Segmentation\save_weights/efficientnet_b1_best_model.engine',
+        default=r'D:\Code\2D-Image-Segmentation\save_weights/efficientnet_b1_1024_best_model.engine',
         help="TensorRT serialized engine path; defaults to newest save_weights/*.engine",
     )
     parser.add_argument("--onnx", type=Path, help="ONNX path used to rebuild an incompatible engine")

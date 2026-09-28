@@ -104,7 +104,7 @@ def convert_onnx():
     os.makedirs("save_weights", exist_ok=True)
 
     onnx_file_name = (
-        f"save_weights/{args.arch}_best_model.onnx"
+        f"save_weights/{args.arch}_{args.image_size}_best_model.onnx"
     )
 
     # ============================================================

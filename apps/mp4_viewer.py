@@ -329,9 +329,9 @@ class Mp4Viewer(QMainWindow):
         return self.compose_frame(self.current_rgb, self.prediction_mask)
 
     def compose_frame(
-        self,
-        frame_rgb: np.ndarray,
-        prediction_mask: np.ndarray | None,
+            self,
+            frame_rgb: np.ndarray,
+            prediction_mask: np.ndarray | None,
     ) -> np.ndarray:
         gray = self.processed_gray(frame_rgb)
         display = (
@@ -349,8 +349,8 @@ class Mp4Viewer(QMainWindow):
                 foreground |= prediction_mask == class_id
         alpha = self.alpha_slider.value() / 100
         display[foreground] = (
-            (1 - alpha) * display[foreground]
-            + alpha * colors[prediction_mask[foreground]]
+                (1 - alpha) * display[foreground]
+                + alpha * colors[prediction_mask[foreground]]
         ).astype(np.uint8)
         return np.ascontiguousarray(display)
 
@@ -625,7 +625,9 @@ class Mp4Viewer(QMainWindow):
         )
 
         engine_path = newest_engine(PROJECT_ROOT / "save_weights")
+        engine_path = Path(r'D:\Code\2D-Image-Segmentation\save_weights/efficientnet_b1_best_model.engine')
         if self.trt_engine is None or engine_path != self.trt_engine_path:
+            print("engine_path:", engine_path)
             trt, cuda = import_trt_runtime()
             try:
                 engine = load_engine(engine_path, trt)
