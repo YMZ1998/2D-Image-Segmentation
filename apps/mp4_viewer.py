@@ -2,6 +2,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -604,13 +605,19 @@ class Mp4Viewer(QMainWindow):
         gray = self.processed_gray(self.current_rgb)
         input_meta = self.onnx_session.get_inputs()[0]
         tensor, _, _ = prepare_onnx_input(gray, input_meta.shape, IMAGE_SIZE)
+        start = time.perf_counter()
         output = self.onnx_session.run(None, {input_meta.name: tensor})[0]
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+
         prediction = onnx_output_to_mask(output)
         self.prediction_mask = cv2.resize(
             prediction, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST
         ).astype(np.uint8)
+        # self.statusBar().showMessage(
+        #     f"ONNX：{model_path.name} · {self.onnx_session.get_providers()[0]}", 3000
+        # )
         self.statusBar().showMessage(
-            f"ONNX：{model_path.name} · {self.onnx_session.get_providers()[0]}", 3000
+            f"ONNX：{model_path.name} · {elapsed_ms:.1f} ms", 3000
         )
 
     def ensure_tensorrt_session(self) -> Path:
